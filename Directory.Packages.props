@@ -3,6 +3,10 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
   <ItemGroup>
+    <!-- SqlClient 6.1.8 requires PKCS >= 9.0.21 on the selected net9.0 asset. -->
+    <PackageVersion Include="Microsoft.Data.SqlClient" Version="6.1.8" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.9" />
     <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.9" />
     <!-- Keep the API's schema library on the patched 2.x line for GHSA-v5pm-xwqc-g5wc. -->
     <PackageVersion Include="Microsoft.OpenApi" Version="2.7.5" />

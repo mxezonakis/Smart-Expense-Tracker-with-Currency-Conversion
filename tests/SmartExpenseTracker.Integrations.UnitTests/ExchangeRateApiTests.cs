@@ -11,7 +11,7 @@ namespace SmartExpenseTracker.Integrations.UnitTests
     [CancelAfter(10000)]
     public sealed class ExchangeRateApiTests
     {
-        private const string ValidFeed = """
+        private const string _validFeed = """
             {"result":"success","base_code":"EUR","time_last_update_unix":1700000000,"rates":{"EUR":1,"USD":1.25,"GBP":0.8}}
             """;
 
@@ -22,7 +22,7 @@ namespace SmartExpenseTracker.Integrations.UnitTests
             {
                 Assert.That(request.Method, Is.EqualTo(HttpMethod.Get));
                 Assert.That(request.RequestUri!.AbsoluteUri, Is.EqualTo("https://open.er-api.com/v6/latest/EUR"));
-                return Reply(ValidFeed);
+                return Reply(_validFeed);
             });
 
             var table = await FetchAsync(services);
@@ -56,7 +56,7 @@ namespace SmartExpenseTracker.Integrations.UnitTests
         [TestCase("\"base_code\":\"EUR\"", "\"base_code\":\"GBP\"")]
         public void RejectsInvalidTableWithoutReturningPartialRates(string original, string replacement)
         {
-            using var services = CreateServices((_, _) => Reply(ValidFeed.Replace(original, replacement)));
+            using var services = CreateServices((_, _) => Reply(_validFeed.Replace(original, replacement)));
             Assert.ThrowsAsync<InvalidDataException>(() => FetchAsync(services));
         }
 
@@ -81,7 +81,7 @@ namespace SmartExpenseTracker.Integrations.UnitTests
             using var services = CreateServices((request, _) =>
             {
                 Assert.That(request.RequestUri!.AbsoluteUri, Is.EqualTo("https://open.er-api.com/v6/latest/JPY"));
-                return Reply(ValidFeed.Replace("EUR", "JPY"));
+                return Reply(_validFeed.Replace("EUR", "JPY"));
             });
             var table = await services.GetRequiredService<IExchangeRateProvider>()
                 .GetLatestAsync("JPY", TestContext.CurrentContext.CancellationToken);
@@ -98,7 +98,7 @@ namespace SmartExpenseTracker.Integrations.UnitTests
             using var services = CreateServices((_, _) =>
             {
                 calls++;
-                return Reply(ValidFeed);
+                return Reply(_validFeed);
             });
             Assert.ThrowsAsync<ArgumentException>(() => services.GetRequiredService<IExchangeRateProvider>()
                 .GetLatestAsync(input, TestContext.CurrentContext.CancellationToken));
@@ -119,7 +119,7 @@ namespace SmartExpenseTracker.Integrations.UnitTests
         public async Task PreservesPublicationThroughInclusiveClockSkewBoundary(int offsetSeconds)
         {
             var published = DateTimeOffset.FromUnixTimeSeconds(1700000000 + offsetSeconds);
-            using var services = CreateServices((_, _) => Reply(ValidFeed.Replace("1700000000", published.ToUnixTimeSeconds().ToString())));
+            using var services = CreateServices((_, _) => Reply(_validFeed.Replace("1700000000", published.ToUnixTimeSeconds().ToString())));
             var table = await FetchAsync(services);
             Assert.That(table.PublishedAt.EqualsExact(published), Is.True);
         }
@@ -128,14 +128,14 @@ namespace SmartExpenseTracker.Integrations.UnitTests
         [TestCase("253402300799")]
         public void RejectsFuturePublicationBeyondTolerance(string unix)
         {
-            using var services = CreateServices((_, _) => Reply(ValidFeed.Replace("1700000000", unix)));
+            using var services = CreateServices((_, _) => Reply(_validFeed.Replace("1700000000", unix)));
             Assert.ThrowsAsync<InvalidDataException>(() => FetchAsync(services));
         }
 
         [Test]
         public void AppliesConfiguredTimeoutToProviderClient()
         {
-            using var services = CreateServices((_, _) => Reply(ValidFeed));
+            using var services = CreateServices((_, _) => Reply(_validFeed));
             using var client = services.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(IExchangeRateProvider));
             Assert.That(client.Timeout, Is.EqualTo(TimeSpan.FromSeconds(1)));
         }

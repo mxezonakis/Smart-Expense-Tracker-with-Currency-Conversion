@@ -9,7 +9,7 @@ namespace SmartExpenseTracker.Integrations
     {
         private readonly HttpClient _client;
         private readonly TimeProvider _clock;
-        private static readonly TimeSpan MaximumClockSkew = TimeSpan.FromMinutes(2);
+        private static readonly TimeSpan _maximumClockSkew = TimeSpan.FromMinutes(2);
 
         public ExchangeRateApiClient(HttpClient client, TimeProvider clock)
         {
@@ -31,7 +31,7 @@ namespace SmartExpenseTracker.Integrations
                 try
                 {
                     using var body = await response.Content.ReadAsStreamAsync(cancellationToken);
-                    feed = await JsonSerializer.DeserializeAsync<Feed>(body, JsonOptions, cancellationToken);
+                    feed = await JsonSerializer.DeserializeAsync<Feed>(body, _jsonOptions, cancellationToken);
                 }
                 catch (JsonException) when (!response.IsSuccessStatusCode)
                 {
@@ -56,7 +56,7 @@ namespace SmartExpenseTracker.Integrations
             }
         }
 
-        private static readonly JsonSerializerOptions JsonOptions = new()
+        private static readonly JsonSerializerOptions _jsonOptions = new()
         {
             AllowDuplicateProperties = false
         };
@@ -72,7 +72,7 @@ namespace SmartExpenseTracker.Integrations
             }
 
             var publishedAt = DateTimeOffset.FromUnixTimeSeconds(feed.PublishedUnix);
-            if (publishedAt - _clock.GetUtcNow() > MaximumClockSkew)
+            if (publishedAt - _clock.GetUtcNow() > _maximumClockSkew)
             {
                 throw new InvalidDataException("Exchange-rate publication time is in the future.");
             }

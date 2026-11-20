@@ -46,7 +46,11 @@ Content-Type: application/json
 {"amount":10.00,"currency":"USD","categoryId":1,"date":"2026-11-20","description":"Train ticket"}
 ```
 
-The 201 response includes a Location and the saved expense. GET /api/expenses lists expenses by ID. GET, PUT and DELETE /api/expenses/{id} read, replace and delete one expense. PUT takes the same body as POST. Successful PUT and DELETE return 204.
+The 201 response includes a Location and the saved expense. GET /api/expenses returns a JSON array of expenses. GET, PUT and DELETE /api/expenses/{id} read, replace and delete one expense. PUT takes the same body as POST. Successful PUT and DELETE return 204.
+
+Example: `GET /api/expenses?from=2026-01-01&to=2026-01-31&categoryId=2&currency=usd&sortBy=amount&direction=asc`.
+
+All query parameters are optional. Both calendar-date boundaries are inclusive and can be supplied independently. Filters combine by intersection. Currency trims surrounding whitespace, requires three ASCII letters, and matches the original currency using its uppercase code. By default the array contains every matching expense in ascending ID order. Supply `sortBy=date` or `sortBy=amount` (stored converted amount) to order by that field. An explicit sort defaults to descending. Use `direction=asc` or `direction=desc` with a sort field. Ties use ascending ID. An empty result returns `[]`. Invalid filters and sort options return HTTP 400 with validation details.
 
 Amounts range from 0.01 to 99,999,999.99 in whole cents. The API trims and uppercases three-letter ASCII currency codes. Dates are calendar dates and may be in the future. Omit the description, supply null, or send blank text for no description. Otherwise its trimmed length may be up to 500 UTF-16 code units.
 

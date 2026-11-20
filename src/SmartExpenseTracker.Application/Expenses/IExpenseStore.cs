@@ -15,7 +15,7 @@ namespace SmartExpenseTracker.Application.Expenses
         Task<bool> HasConflictingDatasetCurrencyAsync(string baseCurrency, CancellationToken cancellationToken);
         Task<Expense> CreateAsync(Expense expense, CancellationToken cancellationToken);
         Task<Expense?> FindAsync(int id, CancellationToken cancellationToken);
-        Task<IReadOnlyList<Expense>> ListAsync(CancellationToken cancellationToken);
+        Task<IReadOnlyList<Expense>> ListAsync(ExpenseQuery query, CancellationToken cancellationToken);
         Task<bool> UpdateAsync(Expense previous, Expense replacement, CancellationToken cancellationToken);
         Task<bool> DeleteAsync(int id, CancellationToken cancellationToken);
     }

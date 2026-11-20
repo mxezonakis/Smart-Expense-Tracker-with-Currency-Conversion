@@ -47,6 +47,9 @@ namespace SmartExpenseTracker.Persistence
             builder.ToTable("Expenses", t => t.HasCheckConstraint("CK_Expenses_Amounts",
                 "[Amount] > 0 AND [AppliedRate] > 0 AND [ConvertedAmount] >= 0"));
             builder.HasKey(r => r.Id);
+            builder.HasIndex(r => r.ConvertedAmount);
+            builder.HasIndex(r => r.Currency);
+            builder.HasIndex(r => r.Date);
             builder.Property(r => r.Amount).HasColumnType("decimal(10,2)");
             builder.Property(r => r.Currency).HasColumnType("char(3)");
             builder.Property(r => r.BaseCurrency).HasColumnType("char(3)");

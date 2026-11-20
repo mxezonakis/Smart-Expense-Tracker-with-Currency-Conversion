@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SmartExpenseTracker.Api/SmartExpenseTracker.Api.csproj" />
+    <Project Path="src/SmartExpenseTracker.Application/SmartExpenseTracker.Application.csproj" />
+    <Project Path="src/SmartExpenseTracker.Persistence/SmartExpenseTracker.Persistence.csproj" />
+    <Project Path="src/SmartExpenseTracker.Integrations/SmartExpenseTracker.Integrations.csproj" />
+    <Project Path="src/SmartExpenseTracker.Caching/SmartExpenseTracker.Caching.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SmartExpenseTracker.Application.UnitTests/SmartExpenseTracker.Application.UnitTests.csproj" />
+    <Project Path="tests/SmartExpenseTracker.Integrations.UnitTests/SmartExpenseTracker.Integrations.UnitTests.csproj" />
+    <Project Path="tests/SmartExpenseTracker.Caching.UnitTests/SmartExpenseTracker.Caching.UnitTests.csproj" />
+    <Project Path="tests/SmartExpenseTracker.Api.IntegrationTests/SmartExpenseTracker.Api.IntegrationTests.csproj" />
+  </Folder>
+</Solution>

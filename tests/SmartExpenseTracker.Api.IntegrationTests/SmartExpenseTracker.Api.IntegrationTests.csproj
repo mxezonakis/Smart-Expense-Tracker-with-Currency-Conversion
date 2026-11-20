@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="NUnit" />
+    <PackageReference Include="NUnit3TestAdapter" />
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+    <PackageReference Include="Testcontainers.MsSql" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/SmartExpenseTracker.Api/SmartExpenseTracker.Api.csproj" />
+    <ProjectReference Include="../../src/SmartExpenseTracker.Persistence/SmartExpenseTracker.Persistence.csproj" />
+    <ProjectReference Include="../../src/SmartExpenseTracker.Application/SmartExpenseTracker.Application.csproj" />
+  </ItemGroup>
+</Project>

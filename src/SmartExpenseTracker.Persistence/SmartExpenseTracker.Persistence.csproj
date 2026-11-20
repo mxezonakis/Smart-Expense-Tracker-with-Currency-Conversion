@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../SmartExpenseTracker.Application/SmartExpenseTracker.Application.csproj" />
+  </ItemGroup>
+</Project>

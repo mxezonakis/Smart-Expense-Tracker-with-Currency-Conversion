@@ -1,0 +1,38 @@
+name: Phase 1 verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore and audit all dependencies
+        run: dotnet restore SmartExpenseTracker.slnx -p:NuGetAudit=true -p:NuGetAuditMode=all -p:NuGetAuditLevel=low -warnaserror
+
+      - name: Build
+        run: dotnet build SmartExpenseTracker.slnx --configuration Release --no-restore -warnaserror
+
+      - name: Run NUnit tests
+        run: dotnet test SmartExpenseTracker.slnx --configuration Release --no-build --no-restore
+
+      - name: Verify formatting
+        run: dotnet format SmartExpenseTracker.slnx --no-restore --verify-no-changes
+
+      - name: Report vulnerable direct and transitive packages
+        if: ${{ !cancelled() }}
+        run: dotnet package list --project SmartExpenseTracker.slnx --no-restore --vulnerable --include-transitive

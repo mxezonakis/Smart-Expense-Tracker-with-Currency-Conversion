@@ -98,3 +98,22 @@ See the [development workflow](AGENTS.md), [C# conventions](docs/DOTNET_BACKEND_
 Reports cover the entire dataset. Category groups use ascending category ID. The required `period` parameter accepts exactly `day`, `week`, or `month` (lowercase). Periods use the stored expense date, including future dates, and appear in chronological order. The start is the expense date, the Monday of its week, or the first of its calendar month respectively. A missing or invalid period returns HTTP 400 with validation ProblemDetails.
 
 Each total is the decimal sum of the already rounded converted amounts in the dataset's persisted base currency. For example, 9.26 EUR and 10.00 EUR in one category give 19.26 EUR. A zero-cent snapshot contributes zero and still establishes its group. Groups without expenses are omitted. Both endpoints return HTTP 200 with `[]` for an empty dataset. Reading a report never fetches rates or updates an expense.
+
+## Request statistics
+
+`GET /api/statistics` returns HTTP 200 with an aggregate snapshot for this running API instance.
+
+```http
+GET /api/statistics HTTP/1.1
+```
+
+```json
+{"completedRequests":4,"failedRequests":1,"totalDurationMs":30.5,"averageDurationMs":7.625}
+```
+
+- `completedRequests` counts requests whose downstream pipeline returned a final status. Requests aborted before completion are excluded. Reading statistics, including with a query string, leaves the snapshot unchanged.
+- `failedRequests` counts completed responses with final HTTP status 400 through 599, including errors produced by exception handling.
+- `totalDurationMs` sums monotonic elapsed milliseconds across completed requests, including overlapping requests. It measures server pipeline execution through error handling and response generation.
+- `averageDurationMs` is the total divided by the completed count in the same snapshot. A fresh instance returns zero for all four fields.
+
+Each API process has its own singleton collector. A short lock keeps updates and snapshot reads consistent while requests execute concurrently. Counters reset when the host restarts.

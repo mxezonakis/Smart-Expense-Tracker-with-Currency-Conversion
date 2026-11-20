@@ -20,10 +20,12 @@ namespace SmartExpenseTracker.Api
             builder.Services.AddSingleton(sp => new DatasetCurrency(sp.GetRequiredService<IOptions<RateCacheOptions>>().Value.BaseCurrency));
             builder.Services.AddScoped<ExpenseService>();
             builder.Services.AddScoped<ReportService>();
+            builder.Services.AddSingleton<RequestStatistics>();
             builder.Services.AddExceptionHandler<ApiExceptionHandler>();
             builder.Services.AddApi(builder.Configuration);
 
             var app = builder.Build();
+            app.UseMiddleware<RequestStatisticsMiddleware>();
             app.UseExceptionHandler();
             app.UseStatusCodePages();
             app.MapControllers();

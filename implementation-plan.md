@@ -42,7 +42,7 @@ GET /api/statistics returns a consistent host-local snapshot: `completedRequests
 
 ### Category contract (Phase 2)
 
-SQL Server generates integer IDs. Trim leading and trailing .NET whitespace with String.Trim, then require 1â€“100 UTF-16 code units. Preserve case, accents and interior whitespace. Store this display name directly. A check constraint rejects empty names and outer Unicode whitespace even for direct SQL writes. The unique index uses Latin1_General_100_CI_AS_SC (case-insensitive and accent-sensitive) independent of database default collation. List by ascending ID. The unique index arbitrates concurrent inserts and renames.
+SQL Server generates integer IDs. Trim leading and trailing .NET whitespace with String.Trim, then require 1-100 UTF-16 code units. Preserve case, accents and interior whitespace. Store this display name directly. A check constraint rejects empty names and outer Unicode whitespace even for direct SQL writes. The unique index uses Latin1_General_100_CI_AS_SC (case-insensitive and accent-sensitive) independent of database default collation. List by ascending ID. The unique index arbitrates concurrent inserts and renames.
 
 POST /api/categories returns 201 with the resource and Location. GET collection/item returns 200. PUT replaces the name and DELETE removes the category, both returning 204. Missing items return 404, invalid writes return validation ProblemDetails (400), and duplicate creates/renames return conflict ProblemDetails (409). Phase 5 introduces the restrictive Expense foreign key and the referenced-category deletion conflict.
 
@@ -61,7 +61,7 @@ POST /api/categories returns 201 with the resource and Location. GET collection/
 | 8. Request statistics | Ship middleware and a read-only endpoint with consistent counts, failures and durations per instance. | Send concurrent successes and failures to an isolated host. Assert exact deltas, coherent duration aggregates and exclusion of snapshot reads. |
 | 9. Final tests, documentation and submission | Complete deterministic suites, OpenAPI, request/response examples, setup, migration and test instructions and documented limitations. Prepare the GitHub repository for delivery (GitLab or a similar repository also satisfies the assignment). | Reproduce restore, database setup, build and tests from a clean checkout. Exercise documented examples and inspect the submission for confidential material. |
 
-## Requirement traceability and Phase 1–2 alignment report
+## Historical requirement traceability and phase alignment report
 
 Reviewed against the private original, including its Requirements, Optional, Evaluation Criteria, Sample APIs and delivery instruction. The first column paraphrases the assignment. The remaining columns record our implementation and evidence. The phase gates above give the detailed test scenarios.
 
@@ -109,7 +109,7 @@ The assignment requires caching to reduce redundant external calls, expiration a
 - A fresh SQL snapshot can serve a cold process immediately. A stale one can serve after refresh failure. A SQL read error allows an upstream attempt. A SQL write error is logged and a valid live table can serve from memory, with restart durability dependent on a successful write. A transaction holds an update/range lock while decoding the existing row and replacing it. Invalid rows, including duplicate currency keys, have no ordering priority. Valid rows use publication then retrieval time. Optional SQL reads and saves each receive a quarter of the overall refresh budget. During provider suppression, misses skip durable reads until the retry deadline.
 - Verification covers refresh, expiration and retry boundaries under controlled time, overlapping callers, cancellation, shared deadline, invalid data, memory eviction and restart. Real SQL Server tests migrate an empty database, race competing replacements through independent contexts and exercise restarted hosts on both sides of the expiration boundary. Memory, retry suppression and request coalescing are per process.
 
-## Decisions still to record
+## Recorded contract decisions
 
 Phase 6 uses inclusive date boundaries. Reports cover the whole dataset. Phase 1 pins FluentAssertions 7.2.0 (Apache-2.0) in Directory.Packages.props.
 
@@ -123,3 +123,27 @@ The assignment requires persisted expense CRUD and automatic base-currency conve
 - Date is a required ISO calendar date, including future dates. Trim optional description, treating omitted/null/blank as null, with a 500 UTF-16 code unit limit after trimming. Category must exist (400). Preserve provider, UTC publication, rate and fallback flag with each foreign conversion. Reprice only after amount or normalized currency changes, independently of expense date.
 - Bind the configured base (default EUR) on the first successful expense write for the dataset. Keep that binding even after all expenses are removed. Reject creates and updates under a conflicting base (409). Before resolving a foreign quote for creation, check for an existing mismatch outside a transaction. At first insertion, serialize competing initializers and commit the binding and expense together. A failed first insert rolls both back.
 - POST returns 201 with Location, GET returns 200, PUT and DELETE return 204. Missing expenses return 404. Concurrent conflicting edits and deletion of referenced categories return 409. Errors use ProblemDetails.
+
+## Phase 9 final verification — 21 November 2026
+
+This section supersedes the earlier phase-time verification statuses above. The original specification was reread in full. Mandatory functionality and evaluation criteria are implemented; optional JWT authentication, isolated users and background refresh remain unselected. Provider names, example currencies and report intervals in the assignment are examples; SQL Server, EUR, stored snapshots, Monday-start weeks, publication-age limits and deterministic ordering are approved project decisions. Pagination is not required and is absent.
+
+A fresh clone of approved Phase 8 merge `41d8a0fe1870c696e44e6814e2ab5ada518139ea` was verified on branch `feature/phase-9-final-verification`. Existing checkouts and stashes were preserved. The [approved main CI](https://github.com/mxezonakis/Smart-Expense-Tracker-with-Currency-Conversion/actions/runs/44826262945) passed; Phase 9 verification below was also executed locally, not inferred from that run.
+
+| Area | Implementation and evidence | Final preparation status |
+|---|---|---|
+| API, CRUD and persistence | Five production/four test projects; scoped services and DbContext; CategoryApiTests and ExpenseApiTests; real HTTP create/read/update/delete walkthrough | Passed |
+| Conversion and efficient external integration | ExchangeRateApiClient, ExpenseService and RateResolver; provider, application, cache and durable SQL tests; live 10 USD write stored 9.11 EUR at applied rate 0.910747641847 | Passed; provider publication 2026-11-20T00:02:32Z, daily rather than streaming |
+| Caching, failure handling and concurrency | Controlled clock/provider tests cover refresh, retry, single-flight, cancellation, 48-hour publication cutoff and durable restart recovery | Passed; no deliberate live-provider outage |
+| Filters and sorts | ExpenseStore SQL predicates/order; inclusive AND filters, normalized original currency, converted amounts, date, stable ID ties and 101-result regression | Passed; no pagination or read-time rate resolution |
+| Reporting | ReportStore SQL GROUP BY/SUM; mixed currencies, zero-cent groups, day/week/month and year boundaries; real HTTP reports | Passed |
+| Statistics | RequestStatistics and middleware; atomic updates, gated concurrency, positive duration, escaping exceptions, cancellation, handled errors and independent hosts | Passed |
+| Fresh database | All four published migrations applied in order; exact index-key assertions, decimal persistence, restrictive FK, unique names, rollback and initializer races | Passed; EF reports no pending model changes |
+| Reproducible setup and documentation | Clean clone, audited restore, pinned EF tool, disposable SQL Server, actual API/OpenAPI and restart walkthrough; README prerequisites, setup and response examples corrected | Passed |
+| Complete suite | Application 37, Caching 22, Integrations 34, API 56 (including 29 real SQL Server tests) | 149 passed, 0 failed, 0 skipped; no Phase 9 test additions |
+| Quality gates | Release warning-as-error build, full solution formatting, direct/transitive vulnerability audit | Passed; build 0 warnings/errors, no known vulnerable packages reported |
+| Submission safety | Tracked source/configuration/docs reviewed; private assignment, credentials and generated outputs excluded; dependency license metadata inspected | Source-only delivery; retain dependency license terms |
+
+The live walkthrough also verified snapshot-preserving metadata edits, stored data after restart, dataset base binding after deleting all expenses, conflict/validation/not-found responses and statistics reset/exclusion. Automated tests remain independent of the live provider. Testcontainers failures are not counted as successful SQL verification: all 29 SQL cases actually passed here.
+
+Only README and this plan were corrected in Phase 9. No production implementation, tests, packages or published migrations changed. Final submission and any commit/push remain gated on independent final review. Optional features would add security/schema or scheduling/lifecycle complexity and delay delivery; none is necessary to satisfy mandatory requirements.

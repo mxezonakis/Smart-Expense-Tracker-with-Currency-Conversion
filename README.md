@@ -1,24 +1,65 @@
 # SmartExpenseTracker
 
-The ASP.NET Core API provides SQL Server-backed category and expense management. Install the .NET 10 SDK specified in global.json (10.0.404 or a later patch in that feature band).
+An ASP.NET Core API for category and expense CRUD, automatic currency conversion, expense filtering/sorting, spending reports and request statistics. It uses .NET 10, EF Core and SQL Server, with NUnit, FakeItEasy and FluentAssertions tests. Authentication, multiple users and scheduled background refresh are optional assignment features and are not implemented.
+
+## Prerequisites
+
+- Git and the .NET 10 SDK specified in global.json (10.0.404 or a later patch in that feature band).
+- SQL Server 2022 or later, with permission to create the development database and apply migrations. The durable-rate JSON constraint requires SQL Server 2022.
+- Docker with a Linux engine and x86-64 SQL Server image support for integration tests or the local database option below.
+- Network access to NuGet and container registries for setup; provider access for live foreign-currency writes. Automated tests use controlled providers.
+- Commands below use PowerShell from the repository root.
 
 ## Run locally
 
-Category and expense requests require a SQL Server instance (SQL Server 2022 is used in tests). Configure the connection using the standard environment variable below. This example uses Windows integrated authentication and trusts a local development certificate. Supply deployment credentials through your environment's secret configuration.
-
-From the repository root in PowerShell:
-
 ```powershell
-dotnet restore SmartExpenseTracker.slnx
-dotnet build SmartExpenseTracker.slnx --no-restore -warnaserror
-$env:ConnectionStrings__SmartExpenseTracker = 'Server=localhost;Database=SmartExpenseTracker;Integrated Security=true;TrustServerCertificate=true'
-# Install once if dotnet-ef is unavailable
-dotnet tool install --global dotnet-ef --version 10.0.9
-dotnet ef database update --project src/SmartExpenseTracker.Persistence --startup-project src/SmartExpenseTracker.Api
-dotnet run --project src/SmartExpenseTracker.Api --launch-profile SmartExpenseTracker.Api
+git clone https://github.com/mxezonakis/Smart-Expense-Tracker-with-Currency-Conversion.git
+cd Smart-Expense-Tracker-with-Currency-Conversion
 ```
 
-Open [the OpenAPI document](http://localhost:54131/openapi/v1.json). The document includes category and expense operations. The host validates the configured API documentation title at startup.
+Category and expense requests require a SQL Server instance (SQL Server 2022 is used in tests). Configure the connection using the standard environment variable below. For an existing local server, configure Windows integrated authentication with the following command (or use the container alternative below). Supply deployment credentials through your environment's secret configuration.
+
+```powershell
+$env:ConnectionStrings__SmartExpenseTracker = 'Server=localhost;Database=SmartExpenseTracker;Integrated Security=true;TrustServerCertificate=true'
+```
+
+If you do not have SQL Server installed, start a development container and use SQL authentication instead of the integrated-authentication connection above:
+
+```powershell
+$env:MSSQL_SA_PASSWORD = 'Aa1!' + [Guid]::NewGuid().ToString('N')
+docker run --detach --name SmartExpenseTracker-dev -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD -p 127.0.0.1:14333:1433 mcr.microsoft.com/mssql/server:2022-CU16-ubuntu-22.04
+$env:ConnectionStrings__SmartExpenseTracker = "Server=localhost,14333;Database=SmartExpenseTracker;User ID=sa;Password=$env:MSSQL_SA_PASSWORD;Encrypt=true;TrustServerCertificate=true"
+Remove-Item Env:MSSQL_SA_PASSWORD
+docker logs SmartExpenseTracker-dev
+```
+
+Wait for "SQL Server is now ready for client connections" before applying migrations and starting the API. Keep the connection variable in the same shell. The generated password is for this local disposable database; do not commit it. Stop/start this container to retain its data; removing it deletes its database. Accepting the SQL Server container EULA is required. The HTTP startup command avoids a development HTTPS certificate dependency. For the optional HTTPS launch profile, configure/trust a .NET development certificate first.
+
+From the repository root in PowerShell, after configuring one of the connections above:
+
+```powershell
+dotnet restore SmartExpenseTracker.slnx -p:NuGetAudit=true -p:NuGetAuditMode=all -warnaserror
+dotnet build SmartExpenseTracker.slnx --configuration Release --no-restore -warnaserror
+
+# Install once if dotnet-ef is unavailable
+dotnet tool install --global dotnet-ef --version 10.0.9
+dotnet ef database update --project src/SmartExpenseTracker.Persistence --startup-project src/SmartExpenseTracker.Api --configuration Release --no-build
+dotnet run --project src/SmartExpenseTracker.Api --configuration Release --no-build --no-launch-profile --urls http://localhost:54131
+```
+
+Open [the OpenAPI document](http://localhost:54131/openapi/v1.json). The document covers all 13 business operations across categories, expenses, reports and statistics. It is JSON OpenAPI, not an interactive Swagger UI. The host validates the configured API documentation title at startup.
+
+## API reference
+
+| Endpoint | Methods | Successful responses |
+|---|---|---|
+| /api/categories | GET, POST | 200 array; 201 object with Location |
+| /api/categories/{id} | GET, PUT, DELETE | 200 object; 204; 204 |
+| /api/expenses | GET, POST | 200 array; 201 object with Location |
+| /api/expenses/{id} | GET, PUT, DELETE | 200 object; 204; 204 |
+| /api/reports/by-category | GET | 200 category totals |
+| /api/reports/by-period?period=day | GET | 200 period totals; also week/month |
+| /api/statistics | GET | 200 statistics snapshot |
 
 ## Categories
 
@@ -37,7 +78,7 @@ Application SQL connections select `us_english` as their session language. SQL S
 
 ## Expenses
 
-Apply migration `20261120180100_AddExpenses` with the database update command above. Create a category first and use its ID. For example, given category 1:
+Apply all migrations with the database update command above, including the expense table and query indexes. Create a category first and use its ID. For example, given category 1:
 
 ```http
 POST /api/expenses
@@ -46,7 +87,13 @@ Content-Type: application/json
 {"amount":10.00,"currency":"USD","categoryId":1,"date":"2026-11-20","description":"Train ticket"}
 ```
 
-The 201 response includes a Location and the saved expense. GET /api/expenses returns a JSON array of expenses. GET, PUT and DELETE /api/expenses/{id} read, replace and delete one expense. PUT takes the same body as POST. Successful PUT and DELETE return 204.
+A base-currency request can use the same body with currency EUR. Its response shape is:
+
+```json
+{"id":1,"amount":10,"currency":"EUR","categoryId":1,"date":"2026-11-20","description":"Train ticket","baseCurrency":"EUR","appliedRate":1,"convertedAmount":10,"provider":null,"publishedAt":null,"isFallback":false}
+```
+
+A USD response has the same fields with its applied rate, converted amount, provider publication timestamp and fallback flag. IDs and live rate values vary. The 201 response includes a Location and the saved expense. GET /api/expenses returns a JSON array of expenses. GET, PUT and DELETE /api/expenses/{id} read, replace and delete one expense. PUT takes the same body as POST. Successful PUT and DELETE return 204.
 
 Example: `GET /api/expenses?from=2026-01-01&to=2026-01-31&categoryId=2&currency=usd&sortBy=amount&direction=asc`.
 
@@ -64,24 +111,25 @@ Under `src/`, Api composes the host. Application owns workflow contracts. Persis
 
 ## Exchange-rate provider
 
-The registered provider retrieves a daily table for the requested base currency and retains the upstream UTC publication time. It exposes base currency units per unit of the quoted currency. For example, an upstream quote of 1.25 USD per EUR maps to 0.8 EUR per USD. Category requests and host startup do not contact the provider. The HTTP timeout defaults to 10 seconds and can be configured with `ExchangeRateApi__TimeoutSeconds` (1–120). No API key is required. [Rates By Exchange Rate API](https://www.exchangerate-api.com)
+The registered provider is ExchangeRate-API Open Access at https://open.er-api.com/v6/latest/{base}. It retrieves the latest published daily table and retains its UTC publication time. Rates follow the provider update schedule; they are not streaming or tick-by-tick quotes. Repeated requests may return the same publication. It exposes base currency units per unit of the quoted currency. For example, an upstream quote of 1.25 USD per EUR maps to 0.8 EUR per USD. Category requests and host startup do not contact the provider. The HTTP timeout defaults to 10 seconds and can be configured with `ExchangeRateApi__TimeoutSeconds` (1–120). No API key is required. [Rates By Exchange Rate API](https://www.exchangerate-api.com)
 
 ## Rate caching and durable fallback
 
 Apply the EF Core migrations using the database update command above before resolving rates. Migration `20261120155857_AddRateSnapshots` targets SQL Server 2022 and stores one complete normalized table per provider and dataset base. The composite primary key and conditional update protect newer publications during concurrent saves.
 
-The resolver fetches on demand. A daily table stays fresh until its usable advertised next update. If the hint is missing, already past, or more than 30 hours after publication, the default refresh deadline is six hours after retrieval. The hard cutoff is always 48 hours from original publication. Re-fetching the same publication, reading SQL and serving fallback never extend that cutoff.
+The resolver fetches on demand. A daily table stays fresh until its usable advertised next update. If the hint is missing, already past, or more than 30 hours after publication, the default refresh deadline is six hours after retrieval. The maximum quote age defaults to 48 hours from original publication and is configurable through `RateCache__MaximumAge`. Re-fetching the same publication, reading SQL and serving fallback never extend that cutoff.
 
 During an outage, callers share one refresh per process. Eligible stale data carries a fallback flag. Without eligible data, resolution fails with `RateUnavailableException`. The default retry delay is 20 minutes and the shared I/O timeout is 30 seconds. A caller can cancel its own wait. Different API instances can refresh independently. Each optional SQL operation gets at most one quarter of the shared timeout (7.5 seconds by default). A failed or timed-out save leaves an eligible live table in memory. Restart recovery depends on a successful durable save. After provider failure, sequential misses skip both SQL and HTTP until the retry deadline. The next request then checks SQL again, so another process can supply a recovered snapshot.
 
-Configure the dataset base with `RateCache__BaseCurrency` (EUR by default). Duration overrides use `RateCache__RefreshInterval`, `RateCache__MaximumAge`, `RateCache__RetryInterval` and `RateCache__RefreshTimeout` in .NET TimeSpan format. The provider schedule takes precedence over the configured refresh interval while the hard cutoff applies to every table. Phase 4 exposes the resolver through dependency injection. Host startup and category endpoints remain independent of exchange-rate availability.
+Configure the dataset base with `RateCache__BaseCurrency` (EUR by default). Duration overrides use `RateCache__RefreshInterval`, `RateCache__MaximumAge`, `RateCache__RetryInterval` and `RateCache__RefreshTimeout` in .NET TimeSpan format. The provider schedule takes precedence over the configured refresh interval while the hard cutoff applies to every table. Host startup and category endpoints remain independent of exchange-rate availability.
 
 ## Verify
 
 ```powershell
-dotnet test SmartExpenseTracker.slnx --no-restore
+dotnet test SmartExpenseTracker.slnx --configuration Release --no-build --no-restore
+dotnet ef migrations has-pending-model-changes --project src/SmartExpenseTracker.Persistence --startup-project src/SmartExpenseTracker.Api --configuration Release --no-build
 dotnet format SmartExpenseTracker.slnx --no-restore --verify-no-changes
-dotnet package list --project SmartExpenseTracker.slnx --vulnerable --include-transitive
+dotnet package list --project SmartExpenseTracker.slnx --no-restore --vulnerable --include-transitive
 ```
 
 The full suite requires a running Docker Linux engine with support for the SQL Server 2022 x86-64 image, enough memory for SQL Server, and access to pull the image. The SqlServer fixture starts a disposable container and migrates an empty database per test. For the Docker-independent subset use `dotnet test SmartExpenseTracker.slnx --filter 'TestCategory!=SqlServer'`. The host tests run without Docker, SQL Server or a live currency provider. In restricted Windows environments, VSTest may be unable to connect to its test host, and the formatter may be denied access to its build-host named pipe. Run those checks in a terminal or CI runner that permits local process communication. The vulnerability audit requires access to current advisory data.
@@ -117,3 +165,11 @@ GET /api/statistics HTTP/1.1
 - `averageDurationMs` is the total divided by the completed count in the same snapshot. A fresh instance returns zero for all four fields.
 
 Each API process has its own singleton collector. A short lock keeps updates and snapshot reads consistent while requests execute concurrently. Counters reset when the host restarts.
+
+## Errors and limits
+
+Expected failures use application/problem+json: 400 for validation, 404 for missing resources, 409 for conflicts and 503 when no eligible conversion quote exists. Unexpected failures use a generic 500 response. For example, a referenced-category deletion returns a 409 ProblemDetails object with title "The category is referenced by an expense." Validation responses also include an errors object keyed by field.
+
+The base currency is configured once for a dataset and remains bound after all expenses are deleted. Expenses are positive, single-user records; refunds and historical-rate lookup are outside the approved scope. Lists return all matches without pagination. Reports cover the whole dataset. Cache coordination and statistics are process-local; there is no distributed coordination or persistent statistics. Current fallback age limits and retry behavior are described above.
+
+The submission is source-only. Restore dependencies from NuGet rather than including binaries. FluentAssertions is pinned to Apache-2.0 version 7.2.0; other dependencies retain their own licenses, including Microsoft native transitive components. The private assignment document is not required to build or run and is excluded from version control.

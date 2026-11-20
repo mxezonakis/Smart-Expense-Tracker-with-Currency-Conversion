@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using SmartExpenseTracker.Application.Categories;
 using SmartExpenseTracker.Application.Expenses;
+using SmartExpenseTracker.Application.Reporting;
 using SmartExpenseTracker.Application.ExchangeRates;
 
 namespace SmartExpenseTracker.Persistence
@@ -21,6 +22,7 @@ namespace SmartExpenseTracker.Persistence
                 }.ConnectionString);
             });
             services.AddScoped<IExpenseStore, ExpenseStore>();
+            services.AddScoped<IReportStore, ReportStore>();
             services.AddScoped<IRateSnapshotStore, RateSnapshotStore>();
             return services.AddScoped<ICategoryStore, CategoryStore>();
         }

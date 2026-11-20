@@ -46,9 +46,9 @@ namespace SmartExpenseTracker.Application.Expenses
             return _expenses.FindAsync(id, cancellationToken);
         }
 
-        public Task<IReadOnlyList<Expense>> ListAsync(CancellationToken cancellationToken)
+        public Task<IReadOnlyList<Expense>> ListAsync(ExpenseQuery query, CancellationToken cancellationToken)
         {
-            return _expenses.ListAsync(cancellationToken);
+            return _expenses.ListAsync(query, cancellationToken);
         }
 
         public Task<bool> DeleteAsync(int id, CancellationToken cancellationToken)

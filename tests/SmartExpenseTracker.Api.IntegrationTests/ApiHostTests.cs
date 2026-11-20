@@ -11,6 +11,28 @@ namespace SmartExpenseTracker.Api.IntegrationTests
 {
     public sealed class ApiHostTests
     {
+        [TestCase("from=2030-02-01&to=2030-01-01")]
+        [TestCase("from=invalid")]
+        [TestCase("categoryId=0")]
+        [TestCase("currency=123")]
+        [TestCase("currency=")]
+        [TestCase("currency=%20%20")]
+        [TestCase("currency=%20us%20")]
+        [TestCase("currency=u%20s")]
+        [TestCase("currency=%C5%BFsd")]
+        [TestCase("sortBy=currency")]
+        [TestCase("sortBy=date&direction=invalid")]
+        [TestCase("direction=desc")]
+        [TestCase("sortBy=99")]
+        public async Task InvalidExpenseQueryReturnsValidationProblem(string query)
+        {
+            await using var factory = new WebApplicationFactory<Program>();
+            using var client = factory.CreateClient();
+            using var response = await client.GetAsync($"/api/expenses?{query}", TestContext.CurrentContext.CancellationToken);
+            response.StatusCode.Should().Be(System.Net.HttpStatusCode.BadRequest);
+            response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
+        }
+
         [Test]
         public async Task ExpenseJsonRejectsUnrepresentableFractionalCents()
         {
@@ -65,6 +87,9 @@ namespace SmartExpenseTracker.Api.IntegrationTests
             var paths = document.RootElement.GetProperty("paths");
             paths.GetProperty("/api/expenses").EnumerateObject().Select(operation => operation.Name)
                 .Should().BeEquivalentTo("post", "get");
+            var listParameters = paths.GetProperty("/api/expenses").GetProperty("get").GetProperty("parameters");
+            listParameters.EnumerateArray().Select(parameter => parameter.GetProperty("name").GetString()!.ToLowerInvariant())
+                .Should().BeEquivalentTo("from", "to", "categoryid", "currency", "sortby", "direction");
             var expenseItem = paths.GetProperty("/api/expenses/{id}");
             expenseItem.EnumerateObject().Select(operation => operation.Name).Should().BeEquivalentTo("get", "put", "delete");
             expenseItem.GetProperty("put").GetProperty("responses").TryGetProperty("503", out _).Should().BeTrue();

@@ -63,9 +63,48 @@ namespace SmartExpenseTracker.Persistence
             return Expenses.Where(r => r.Id == id).Select(_projection).SingleOrDefaultAsync(cancellationToken);
         }
 
-        public async Task<IReadOnlyList<Expense>> ListAsync(CancellationToken cancellationToken)
+        public async Task<IReadOnlyList<Expense>> ListAsync(ExpenseQuery query, CancellationToken cancellationToken)
         {
-            return await Expenses.OrderBy(r => r.Id).Select(_projection).ToListAsync(cancellationToken);
+            return await BuildListQuery(query).ToListAsync(cancellationToken);
+        }
+
+        private IQueryable<Expense> BuildListQuery(ExpenseQuery query)
+        {
+            var rows = Expenses.AsNoTracking();
+            if (query.From is { } from)
+            {
+                rows = rows.Where(row => row.Date >= from);
+            }
+
+            if (query.To is { } to)
+            {
+                rows = rows.Where(row => row.Date <= to);
+            }
+
+            if (query.CategoryId is { } categoryId)
+            {
+                rows = rows.Where(row => row.CategoryId == categoryId);
+            }
+
+            if (query.Currency is { } currency)
+            {
+                rows = rows.Where(row => row.Currency == currency);
+            }
+
+            if (query.SortBy is null)
+            {
+                return rows.OrderBy(row => row.Id).Select(_projection);
+            }
+
+            var sorted = (query.SortBy, query.Descending) switch
+            {
+                (ExpenseSort.Amount, true) => rows.OrderByDescending(row => row.ConvertedAmount),
+                (ExpenseSort.Amount, false) => rows.OrderBy(row => row.ConvertedAmount),
+                (ExpenseSort.Date, true) => rows.OrderByDescending(row => row.Date),
+                (ExpenseSort.Date, false) => rows.OrderBy(row => row.Date),
+                _ => throw new ArgumentOutOfRangeException(nameof(query))
+            };
+            return sorted.ThenBy(row => row.Id).Select(_projection);
         }
 
         public async Task<bool> UpdateAsync(Expense previous, Expense replacement, CancellationToken cancellationToken)

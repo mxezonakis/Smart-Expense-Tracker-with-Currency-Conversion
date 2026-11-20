@@ -131,7 +131,7 @@ If `.editorconfig` already prescribes incompatible namespace or constructor conv
 - Prefer individual `IEntityTypeConfiguration<T>` classes for nontrivial mappings. Explicitly configure money precision, required columns, foreign keys, deletion behavior, unique constraints and relevant indexes.
 - Use a relational model consistent with the approved contracts: expense date handling, original amount/currency, applied exchange rate, converted base amount and quote metadata. Do not invent additional expense fields or reporting semantics.
 - Keep migrations in Persistence, and run them with an appropriate startup project. Do not rely on `EnsureCreated` as a replacement for migration verification.
-- Push filtering, stable sorting, bounded pagination and aggregations down to SQL when possible. Use projections for read endpoints rather than loading unnecessary graphs.
+- Push filtering, stable sorting and aggregations down to SQL when possible. Use projections for read endpoints rather than loading unnecessary graphs.
 - Use `AsNoTracking()` for read-only entity queries when beneficial. Avoid accidental N+1 access patterns; inspect generated SQL and execution plans for important query paths.
 - Preserve database integrity using unique constraints, foreign keys and explicit transactions for truly multi-step atomic writes. Obtain fresh exchange rates **before** starting a database transaction.
 - A `DbContext` is not thread-safe. Do not share it across concurrent tasks or long-lived singleton services. Use a suitable fresh scope for background/shared refresh persistence operations.

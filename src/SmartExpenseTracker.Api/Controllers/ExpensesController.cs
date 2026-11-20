@@ -27,9 +27,14 @@ namespace SmartExpenseTracker.Api.Controllers
         }
 
         [HttpGet]
-        public async Task<ActionResult<ExpenseResponse[]>> List(CancellationToken cancellationToken)
+        [EndpointDescription("Returns all matches in ascending ID order by default. From and To are inclusive. " +
+            "CategoryId and original Currency filters can be combined. SortBy accepts date or amount (stored converted amount). " +
+            "Direction accepts asc or desc and defaults to desc for an explicit sort. Ties use ascending ID.")]
+        [ProducesResponseType<ValidationProblemDetails>(400)]
+        [ProducesResponseType<ExpenseResponse[]>(200)]
+        public async Task<ActionResult<ExpenseResponse[]>> List([FromQuery] ExpenseListRequest request, CancellationToken cancellationToken)
         {
-            var expenses = await _expenses.ListAsync(cancellationToken);
+            var expenses = await _expenses.ListAsync(request.ToQuery(), cancellationToken);
             return expenses.Select(ExpenseResponse.FromExpense).ToArray();
         }
 

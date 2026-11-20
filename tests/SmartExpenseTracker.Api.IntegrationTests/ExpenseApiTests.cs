@@ -57,7 +57,8 @@ namespace SmartExpenseTracker.Api.IntegrationTests
             await context.Database.MigrateAsync(Token);
             var language = await context.Database.SqlQuery<string>($"SELECT @@LANGUAGE AS [Value]").SingleAsync(Token);
             language.Should().Be("us_english");
-            (await context.Database.GetAppliedMigrationsAsync(Token)).Should().Contain("20261120180100_AddExpenses");
+            (await context.Database.GetAppliedMigrationsAsync(Token)).Should().Contain(
+                new[] { "20261120180100_AddExpenses", "20261120210000_AddExpenseQueryIndexes" });
             using var created = await _client.PostAsJsonAsync("/api/categories", new { name = "Travel" }, Token);
             created.EnsureSuccessStatusCode();
             _category = (await created.Content.ReadFromJsonAsync<CategoryResponse>(Token))!.Id;
@@ -77,6 +78,86 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         }
 
         private ExpenseRequest Input(string currency) => new ExpenseRequest(10m, currency, _category, new DateOnly(2030, 1, 2), null);
+
+        [Test]
+        public async Task MigratedExpensesTableHasExpectedQueryIndexKeys()
+        {
+            using var scope = _factory.Services.CreateScope();
+            var context = scope.ServiceProvider.GetRequiredService<SmartExpenseTrackerDbContext>();
+            var keys = await context.Database.SqlQuery<string>($"""
+                SELECT CONCAT(i.name, '.', c.name) AS [Value]
+                FROM sys.indexes AS i
+                JOIN sys.index_columns AS ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+                JOIN sys.columns AS c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                WHERE i.object_id = OBJECT_ID(N'dbo.Expenses', N'U')
+                  AND i.name IN ('IX_Expenses_Date', 'IX_Expenses_Currency', 'IX_Expenses_ConvertedAmount')
+                  AND ic.key_ordinal > 0
+                """).ToListAsync(Token);
+
+            keys.Should().BeEquivalentTo("IX_Expenses_Date.Date", "IX_Expenses_Currency.Currency",
+                "IX_Expenses_ConvertedAmount.ConvertedAmount");
+        }
+
+        [Test]
+        public async Task ListCombinesInclusiveFiltersAndSortsStoredValues()
+        {
+            async Task<int> Add(ExpenseRequest expense)
+            {
+                using var response = await _client.PostAsJsonAsync(_route, expense, Token);
+                response.EnsureSuccessStatusCode();
+                return (await response.Content.ReadFromJsonAsync<ExpenseResponse>(Token))!.Id;
+            }
+
+            async Task<int[]> Ids(string query)
+            {
+                var rows = await _client.GetFromJsonAsync<ExpenseResponse[]>($"{_route}?{query}", Token);
+                return rows!.Select(row => row.Id).ToArray();
+            }
+
+            using var createCategory = await _client.PostAsJsonAsync("/api/categories", new { name = "Other" }, Token);
+            createCategory.EnsureSuccessStatusCode();
+            int otherCategory = (await createCategory.Content.ReadFromJsonAsync<CategoryResponse>(Token))!.Id;
+            var usd = Input("USD");
+            int first = await Add(usd);
+            int second = await Add(usd);
+            int euro = await Add(Input("EUR") with { Amount = 9.50m });
+            int later = await Add(usd with { Date = usd.Date.AddDays(1) });
+            int other = await Add(usd with { CategoryId = otherCategory });
+            _rates.Available = false;
+
+            var usdIds = await Ids("currency=USD");
+            usdIds.Should().Equal(first, second, later, other);
+            (await Ids("currency=%20uSd%20")).Should().Equal(usdIds);
+            using var malformed = await _client.GetAsync($"{_route}?currency=%20US1%20", Token);
+            await AssertProblem(malformed, HttpStatusCode.BadRequest);
+
+            string filters = $"from=2030-01-02&to=2030-01-02&categoryId={_category}&currency=usd";
+            (await Ids(filters)).Should().Equal(first, second);
+            (await Ids("from=2030-01-03")).Should().Equal(later);
+            (await Ids("to=2030-01-01")).Should().BeEmpty();
+            (await Ids("sortBy=amount&direction=asc")).Should().Equal(first, second, later, other, euro);
+            (await Ids("sortBy=amount&direction=desc")).Should().Equal(euro, first, second, later, other);
+            (await Ids("sortBy=date&direction=asc")).Should().Equal(first, second, euro, other, later);
+            (await Ids("sortBy=date")).Should().Equal(later, first, second, euro, other);
+            (await Ids("")).Should().Equal(first, second, euro, later, other);
+            _rates.Calls.Should().Be(4);
+        }
+
+        [Test]
+        public async Task ListReturnsEveryMatchingExpenseInIdOrder()
+        {
+            var ids = new List<int>();
+            for (int index = 0; index < 101; index++)
+            {
+                using var created = await _client.PostAsJsonAsync(_route, Input("EUR"), Token);
+                created.EnsureSuccessStatusCode();
+                ids.Add((await created.Content.ReadFromJsonAsync<ExpenseResponse>(Token))!.Id);
+            }
+
+            var matches = await _client.GetFromJsonAsync<ExpenseResponse[]>($"{_route}?categoryId={_category}&currency=EUR", Token);
+            matches!.Select(row => row.Id).Should().Equal(ids);
+            _rates.Calls.Should().Be(0);
+        }
 
         [Test]
         public async Task IdentityCrudAndReferencedCategoryRestriction()

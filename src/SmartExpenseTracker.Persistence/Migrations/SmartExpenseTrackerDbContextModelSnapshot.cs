@@ -121,6 +121,12 @@ namespace SmartExpenseTracker.Persistence.Migrations
 
                     b.HasIndex("CategoryId");
 
+                    b.HasIndex("ConvertedAmount");
+
+                    b.HasIndex("Currency");
+
+                    b.HasIndex("Date");
+
                     b.ToTable("Expenses", null, t =>
                         {
                             t.HasCheckConstraint("CK_Expenses_Amounts", "[Amount] > 0 AND [AppliedRate] > 0 AND [ConvertedAmount] >= 0");

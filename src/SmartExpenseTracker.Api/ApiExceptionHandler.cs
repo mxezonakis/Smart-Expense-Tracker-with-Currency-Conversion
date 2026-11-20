@@ -1,14 +1,16 @@
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 using SmartExpenseTracker.Application.Categories;
+using SmartExpenseTracker.Application.ExchangeRates;
+using SmartExpenseTracker.Application.Expenses;
 
 namespace SmartExpenseTracker.Api
 {
-    internal sealed class CategoryExceptionHandler : IExceptionHandler
+    internal sealed class ApiExceptionHandler : IExceptionHandler
     {
         private readonly IProblemDetailsService _problems;
 
-        public CategoryExceptionHandler(IProblemDetailsService problems)
+        public ApiExceptionHandler(IProblemDetailsService problems)
         {
             _problems = problems;
         }
@@ -29,6 +31,15 @@ namespace SmartExpenseTracker.Api
                     Status = StatusCodes.Status409Conflict,
                     Title = "A category with this name already exists."
                 },
+                ExpenseValidationException invalid => new ValidationProblemDetails(new Dictionary<string, string[]>
+                {
+                    [invalid.Field] = [invalid.Message]
+                })
+                {
+                    Status = StatusCodes.Status400BadRequest
+                },
+                ExpenseConflictException conflict => new ProblemDetails { Status = 409, Title = conflict.Message },
+                RateUnavailableException => new ProblemDetails { Status = 503, Title = "No eligible exchange rate is available." },
                 _ => null
             };
 

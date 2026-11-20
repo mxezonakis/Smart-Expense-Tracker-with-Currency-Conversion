@@ -1,6 +1,7 @@
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using SmartExpenseTracker.Application.Categories;
+using SmartExpenseTracker.Application.Expenses;
 
 namespace SmartExpenseTracker.Persistence
 {
@@ -67,7 +68,14 @@ namespace SmartExpenseTracker.Persistence
 
         public async Task<bool> DeleteAsync(int id, CancellationToken cancellationToken)
         {
-            return await Categories.Where(row => row.Id == id).ExecuteDeleteAsync(cancellationToken) != 0;
+            try
+            {
+                return await Categories.Where(row => row.Id == id).ExecuteDeleteAsync(cancellationToken) != 0;
+            }
+            catch (SqlException exception) when (ExpenseStore.IsCategoryReferenceFailure(exception, "DELETE"))
+            {
+                throw new ExpenseConflictException("The category is referenced by an expense.", exception);
+            }
         }
     }
 }

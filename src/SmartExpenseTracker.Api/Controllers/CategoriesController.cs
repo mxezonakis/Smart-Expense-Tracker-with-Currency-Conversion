@@ -52,6 +52,7 @@ namespace SmartExpenseTracker.Api.Controllers
         }
 
         [HttpDelete("{id:int}")]
+        [ProducesResponseType<ProblemDetails>(409)]
         [ProducesResponseType(204)]
         [ProducesResponseType<ProblemDetails>(404)]
         public async Task<IActionResult> Delete(int id, CancellationToken cancellationToken)

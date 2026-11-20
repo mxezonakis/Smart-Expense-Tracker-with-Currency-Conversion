@@ -6,5 +6,6 @@ namespace SmartExpenseTracker.Application.ExchangeRates
         string Provider,
         string BaseCurrency,
         DateTimeOffset PublishedAt,
-        FrozenDictionary<string, decimal> BaseUnitsPerCurrencyUnit);
+        FrozenDictionary<string, decimal> BaseUnitsPerCurrencyUnit,
+        DateTimeOffset? NextUpdateAt = null);
 }

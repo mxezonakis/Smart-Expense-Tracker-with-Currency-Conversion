@@ -37,6 +37,10 @@ POST returns 201, a Location header and an object such as `{"id":1,"name":"Food"
 
 Under `src/`, Api composes the host. Application owns workflow contracts. Persistence owns EF Core, migrations and SQL Server access. Integrations and Caching are reserved for exchange-rate HTTP access and rate caching. Under `tests/`, Application, Integrations and Caching each have a unit-test project. Api.IntegrationTests exercises host behavior.
 
+## Exchange-rate provider
+
+The registered provider retrieves a daily table for the requested base currency and retains the upstream UTC publication time. It exposes base currency units per unit of the quoted currency. For example, an upstream quote of 1.25 USD per EUR maps to 0.8 EUR per USD. Category requests and host startup do not contact the provider. The HTTP timeout defaults to 10 seconds and can be configured with `ExchangeRateApi__TimeoutSeconds` (1–120). No API key is required. [Rates By Exchange Rate API](https://www.exchangerate-api.com)
+
 ## Verify
 
 ```powershell

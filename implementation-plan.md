@@ -88,6 +88,16 @@ The reviewed Phase 2 head was `54d7e8d`. CI passed 6 application unit tests, 2 h
 
 **Review outcome.** No Phase 1–2 production conflict identified. The previous matrix grouped category constraints and pagination under mandatory assignment requirements. This report attributes them to project decisions and separates provider examples from the required integration outcome. Future-phase rows record delivery work, not current defects.
 
+## Phase 3 implementation and verification
+
+The selected provider is the ExchangeRate-API open access daily feed. The adapter retrieves the latest table for the requested base, uses the provider's Unix publication timestamp and returns immutable decimal reciprocals in base units per original unit. A manual call through the registered adapter retrieved 166 EUR-based entries published at 00:02:32 UTC on 20 November 2026. Automated provider tests use controlled HTTP responses. [Provider contract](https://www.exchangerate-api.com/docs/free)
+
+For Phase 4, the approved six-hour refresh interval may return the same publication several times per day. A repeated publication retains its original age. The 48-hour stale limit spans two nominal publication intervals. Keep these as configurable initial defaults.
+
+Phase 3 accepts an upstream UTC publication timestamp up to two minutes ahead of the local UTC clock, inclusive, to tolerate minor clock differences. The adapter preserves the supplied timestamp and rejects a later publication as invalid data. This tolerance is a project decision.
+
+The Open Access contract documents an error envelope and HTTP 429 for rate limiting. Since it does not specify the status for every error code, the adapter recognizes a declared failure on either successful or unsuccessful HTTP statuses. It retains the HTTP status and a recognized error code (including `unsupported-code`), mapping unrecognized codes to `unknown`. An unsuccessful status with no usable error envelope remains an HTTP failure. A successful status with malformed success data is invalid provider data.
+
 ## Decisions still to record
 
-Select the provider/feed and verify its update cadence, quote timestamps and suitability for the configured windows. Specify SQL precision and scale, supported input limits and midpoint rounding with examples. Finalize future-date handling, date-range inclusivity, page defaults/maximum and report filter parameters. Resolve each detail before implementing its affected phase. Phase 1 pins FluentAssertions 7.2.0 (Apache-2.0) in Directory.Packages.props.
+Specify SQL precision and scale, supported input limits and midpoint rounding with examples. Finalize future-date handling, date-range inclusivity, page defaults/maximum and report filter parameters. Resolve each detail before implementing its affected phase. Phase 1 pins FluentAssertions 7.2.0 (Apache-2.0) in Directory.Packages.props.

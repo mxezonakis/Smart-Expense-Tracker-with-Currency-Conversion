@@ -2,9 +2,9 @@
 
 The assignment DOCX under docs defines the deliverable. Consult [AGENTS.md](AGENTS.md) for project boundaries and [the backend conventions](docs/DOTNET_BACKEND_INSTRUCTIONS.md) for C# implementation rules. This plan records the approved design and how to verify each phase.
 
-## Structure and responsibilities
+## Approved project decisions and responsibilities
 
-SmartExpenseTracker.slnx will contain exactly five production projects under src and four test projects under tests. The first five rows are production projects.
+SmartExpenseTracker.slnx contains exactly five production projects under src and four test projects under tests. The first five rows are production projects.
 
 | Project | Direct project references (SmartExpenseTracker prefix omitted) |
 |---|---|
@@ -28,7 +28,7 @@ Enforce category name uniqueness and restrict deletion of referenced categories 
 
 Configure a 6-hour fresh TTL and 48-hour maximum stale age. Reevaluate both against the selected provider's update cadence. Keep expired-freshness entries available until their stale limit. On a miss, recheck state after acquiring synchronization and coalesce refreshes per provider/base key. Validate quotes before replacing last-known data. Recover acceptable durable rates after restart. Never extend quote age on a fallback read. Reject invalid and excessively stale rates. Return 503 ProblemDetails when no acceptable rate exists. Resolve rates before opening a database transaction.
 
-Propagate CancellationToken through supported I/O and allow each caller to cancel its wait independently. Bound synchronization state to configured keys or safely retire completed entries. Never run concurrent operations on one DbContext. Mandatory concurrency coverage includes shared cache, statistics and SQL constraints/atomic writes. ETags and rowversion are optional.
+Propagate CancellationToken through supported I/O and allow each caller to cancel its wait independently. Bound synchronization state to configured keys or safely retire completed entries. Never run concurrent operations on one DbContext. The approved project concurrency checks cover shared cache, statistics and SQL constraints/atomic writes. ETags and rowversion are optional.
 
 Measure completed requests, failures and response durations in Api middleware. Use a monotonic clock and a short lock around counter updates and snapshot reads. Expose a read-only aggregate snapshot. Counters reset on restart and cover one process.
 
@@ -42,7 +42,7 @@ For statistics, propose GET /api/statistics returning completed request count, f
 
 ### Category contract (Phase 2)
 
-SQL Server generates integer IDs. Trim leading and trailing .NET whitespace with String.Trim, then require 1–100 UTF-16 code units. Preserve case, accents and interior whitespace. Store this display name directly. A check constraint rejects empty names and outer Unicode whitespace even for direct SQL writes. The unique index uses Latin1_General_100_CI_AS_SC (case-insensitive and accent-sensitive) independent of database default collation. List by ascending ID. The unique index arbitrates concurrent inserts and renames.
+SQL Server generates integer IDs. Trim leading and trailing .NET whitespace with String.Trim, then require 1â€“100 UTF-16 code units. Preserve case, accents and interior whitespace. Store this display name directly. A check constraint rejects empty names and outer Unicode whitespace even for direct SQL writes. The unique index uses Latin1_General_100_CI_AS_SC (case-insensitive and accent-sensitive) independent of database default collation. List by ascending ID. The unique index arbitrates concurrent inserts and renames.
 
 POST /api/categories returns 201 with the resource and Location. GET collection/item returns 200. PUT replaces the name and DELETE removes the category, both returning 204. Missing items return 404, invalid writes return validation ProblemDetails (400), and duplicate creates/renames return conflict ProblemDetails (409). Phase 5 introduces the restrictive Expense foreign key and the referenced-category deletion conflict.
 
@@ -59,30 +59,34 @@ POST /api/categories returns 201 with the resource and Location. GET collection/
 | 6. Filtering, sorting and pagination | Combine date, category and currency filters. Support date and converted-amount sorts and bounded deterministic pages. Add indexes suited to query predicates. | Query seeded mixed currencies and tied sort values in SQL Server. Check page limits, page boundaries and combined filters. Inspect generated query and schema. |
 | 7. Reporting | Return spending per category and per daily, Monday-start weekly or monthly period using filtered stored conversions. | Reconcile SQL totals against fixture amounts across Sunday/Monday and month boundaries, including empty ranges. Verify zero provider calls. |
 | 8. Request statistics | Ship middleware and a read-only endpoint with consistent counts, failures and durations per instance. | Send concurrent successes and failures to an isolated host. Assert exact deltas, coherent duration aggregates and exclusion of snapshot reads. |
-| 9. Final tests, documentation and submission | Complete deterministic suites, OpenAPI, request/response examples, setup, migration and test instructions and documented limitations. Prepare the required Git-hosted submission. | Reproduce restore, database setup, build and tests from a clean checkout. Exercise documented examples and inspect the submission for confidential material. |
+| 9. Final tests, documentation and submission | Complete deterministic suites, OpenAPI, request/response examples, setup, migration and test instructions and documented limitations. Prepare the GitHub repository for delivery (GitLab or a similar repository also satisfies the assignment). | Reproduce restore, database setup, build and tests from a clean checkout. Exercise documented examples and inspect the submission for confidential material. |
 
-## Requirement traceability
+## Requirement traceability and Phase 1–2 alignment report
 
-Use NUnit, FakeItEasy and a license-approved FluentAssertions version. Pin the reviewed release centrally. Use controlled time, deterministic synchronization and fake HTTP responses. Use an isolated real SQL Server database, preferably Testcontainers, for API integration tests. All automated tests must run independently of live currency APIs.
+Reviewed against the private original, including its Requirements, Optional, Evaluation Criteria, Sample APIs and delivery instruction. The first column paraphrases the assignment. The remaining columns record our implementation and evidence. The phase gates above give the detailed test scenarios.
 
-Test suite names below use their project suffix. API tests exercise the composed host and SQL Server.
+The reviewed Phase 2 head was `54d7e8d`. CI passed 6 application unit tests, 2 host tests and 10 real SQL Server integration tests. Provider, expense, cache, reporting and statistics behavior remains future work. [Phase 2 verification](https://github.com/mxezonakis/Smart-Expense-Tracker-with-Currency-Conversion/actions/runs/44749813794)
 
-| Mandatory requirement or evaluation criterion | Responsible component | Verification |
-|---|---|---|
-| ASP.NET Core API, maintainable structure and replaceable provider | Api composition, Application contracts | Api.IntegrationTests host startup with a controlled upstream, phase 1 reference inspection |
-| Actual latest-rate HTTP integration | Integrations | Integrations.UnitTests for request, mapping, direction, malformed responses, upstream errors, timeouts and cancellation |
-| Expense CRUD with amount, currency, category, date and optional description | Application, Persistence, Api | Api.IntegrationTests round-trip each operation with and without description |
-| Category CRUD, uniqueness and deletion restrictions | Application, Persistence, Api | Api.IntegrationTests for CRUD, duplicate writes and referenced deletion |
-| Persistent data, efficient schema and filtering | Persistence | Api.IntegrationTests for migrations, data across scopes, SQL constraints and combined filters, phase 6 index review |
-| Consistent automatic base conversion | Application, Integrations | Application.UnitTests for positive validation, rate direction, precision, rounding, identity rate and snapshot edit policy |
-| Efficient conversion, freshness, invalidation and avoidance of redundant calls | Caching | Caching.UnitTests for fresh hits, expiry, single-flight refresh, replacement and independent waiter cancellation |
-| Graceful errors and last-known rates | Caching, Persistence, Api | Caching.UnitTests for failed/invalid refresh and stale cutoff, Api.IntegrationTests for restart recovery and 503 ProblemDetails |
-| Date/category/currency filters, amount/date sorting and bounded pagination | Application, Persistence, Api | Api.IntegrationTests for combined filters, equal sort keys, limits and deterministic ordering |
-| Category and time-period spending totals | Application, Persistence, Api | Api.IntegrationTests for filtered category/day/week/month totals from stored conversions |
-| Async I/O, appropriate parallelism and shared-state correctness | Integrations, Caching, Api, Persistence | Overlapping refresh and cancellation tests, concurrent statistics and database constraint tests, async call-chain review |
-| Request statistics | Api | Api.IntegrationTests for concurrent counts, failures, durations and snapshot reads |
-| Unit-test reliability and important HTTP workflows | All four test suites | Phase 9 deterministic full run with controlled HTTP and isolated SQL Server |
-| API formats, setup instructions and repository delivery | Api OpenAPI, README, submission repository | Phase 9 clean-checkout walkthrough of documented commands and HTTP examples |
+| Assignment requirement or evaluation criterion | Planned implementation and verification | Status after Phase 2 | Deviation, example or project decision | Corrective action or remaining gate |
+|---|---|---|---|---|
+| ASP.NET Core API, readable and maintainable code | Api composes Application and infrastructure. Review boundaries and test host startup. | Host, category controller and scoped persistence implemented. | .NET 10, MVC and the nine-project layout are approved choices. | Preserve boundaries in subsequent reviews. |
+| Extensible provider integration and successful retrieval of real-time rates from at least one external API | Phase 3 typed HTTP adapter behind an Application contract. Integrations.UnitTests cover mapping, payloads and errors. | Integration project exists. No provider implemented. | ExchangeRate API and Fixer are examples. Historical data is a stated provider capability. Provider selection and publication cadence are open. | At Phase 3 verify a real provider can supply current rates and record evidence of successful integration. Keep automated tests independent of live services. |
+| Expense CRUD with amount, currency, category, date and optional description | Phase 5 Application workflow, Persistence mapping and API round-trip tests. | Planned. | Positive amounts and update rules are approved decisions. | Verify all four operations and expenses with and without descriptions. |
+| Expense-category CRUD | Phase 2 Application, Persistence and Api. Category API tests exercise create, list, retrieve, rename and delete. | Implemented and verified. | Integer IDs, trim/length rules, uniqueness and referenced-category restrictions are project decisions. | No Phase 2 correction. Verify restricted deletion in Phase 5 when expenses exist. |
+| Durable data and efficient expense queries | Persistence schema and migrations in phases 2 and 5. Review SQL predicates and indexes in Phase 6. | Categories survive independent request scopes. Expense storage pending. | The assignment allows a database of choice. SQL Server and EF Core were approved. | Verify expense persistence and SQL filtering against the migrated schema. |
+| Automatic, consistent and efficient base-currency conversion using external rates | Phases 3–5 resolve rates, cache them and persist the applied conversion. Application.UnitTests verify direction, rounding and updates. | Planned. | EUR and USD are examples. EUR, local identity conversion and stored snapshots are approved here. | Establish precision and rounding, then verify monetary and metadata-only edits. |
+| Expense filters for date range, category and currency, and sorting by amount and date | Phase 6 SQL queries exposed by Api. Test combined filters and ties. | Planned. | Converted-amount sorting, bounded pagination and the ID tie-breaker are project decisions. | Resolve query boundaries and verify deterministic results. |
+| Aggregated spending insights and correct reporting endpoints | Phase 7 Application orchestrates SQL totals. Reconcile filtered results against known amounts. | Planned. | Category and period totals are the supplied examples adopted by the project. Daily, weekly and monthly are example intervals. Monday-start weeks are our convention. | Verify totals across period boundaries and empty results. |
+| Graceful external failures and effective fallback | Phases 3–5 validate upstream replies and recover acceptable last-known rates. Exercise failure paths with controlled responses and time. | Category HTTP errors verified. Provider failure handling pending. | Cached or last-known rates are examples. Durable fallback and 503 on exhaustion are approved choices. | Test refresh failure, restart and rejection of excessively stale data. |
+| Effective caching with expiration and invalidation to reduce external calls | Phase 4 Caching refreshes or replaces entries and coordinates concurrent callers. Count upstream calls in Caching.UnitTests. | Planned. | In-memory caching, six-hour freshness and 48-hour stale retention are project defaults. | Reevaluate defaults against provider cadence and test both deadlines. |
+| Appropriate async work, scalability and shared-state concurrency | Use cancellable I/O, independent scopes and SQL constraints. Test concurrent cache and statistics operations in phases 4 and 8. | Async category operations and concurrent duplicate creation verified. | Scoped DbContext and per-key refresh coordination are implementation choices. | Verify shared refresh and counter correctness as those components ship. |
+| Request statistics with correct concurrent behavior (explicit evaluation criterion) | Phase 8 Api middleware and a read-only snapshot. Test concurrent successes and failures. | Planned. | Counts, timings, endpoint shape and single-process scope are project choices. | Verify exact counter deltas and document reset on restart. |
+| Complete and correct unit tests | Application, Integrations and Caching unit suites plus API integration coverage as each phase ships. | Category rules, API contracts and SQL behavior covered. | NUnit, FakeItEasy, FluentAssertions and Testcontainers are approved tooling. | Add the relevant tests per phase and run the complete suite at submission. |
+| Clear API documentation covering endpoints, request/response formats and setup | Api OpenAPI and README; Phase 9 walkthrough from a clean checkout. | Category contracts, setup, migration commands and examples available. | OpenAPI is the selected documentation mechanism. | Extend documentation alongside each implemented workflow and verify examples. |
+| Deliver through GitHub, GitLab or a similar repository | Phase 9 submit the repository with reproducible setup and verification instructions. | GitHub review branch and PR exist. Final submission pending. | GitHub and the phased PR workflow are project choices. | Verify clean-checkout setup and deliver the repository link. |
+| Optional features and optional evaluation criteria | JWT bearer authentication, isolated multi-user data and a scheduled rate refresh service. | All three excluded from the approved scope. | Optional in the assignment. | No implementation action without explicit approval. |
+
+**Review outcome.** No Phase 1–2 production conflict identified. The previous matrix grouped category constraints and pagination under mandatory assignment requirements. This report attributes them to project decisions and separates provider examples from the required integration outcome. Future-phase rows record delivery work, not current defects.
 
 ## Decisions still to record
 

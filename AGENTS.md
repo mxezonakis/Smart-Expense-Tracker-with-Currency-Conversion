@@ -1,8 +1,14 @@
 # SmartExpenseTracker development instructions
 
-Before modifying C# code, read and follow [the .NET backend conventions](docs/DOTNET_BACKEND_INSTRUCTIONS.md). This file governs project boundaries and workflow. The implementation plan governs feature scope and verification gates.
+## Assignment compliance
 
-Read the assignment DOCX under docs and the root [implementation plan](implementation-plan.md) before starting a phase. Use the plan's acceptance criteria, traceability matrix and open decisions. Explain substantial design changes before editing. Verify the affected workflows and report actual results.
+The private original assignment DOCX under `docs/` is authoritative for functionality, optional work, evaluation criteria and delivery. This file records project boundaries and workflow. The [implementation plan](implementation-plan.md) records the approved approach and verification gates. Read and follow the [backend conventions](docs/DOTNET_BACKEND_INSTRUCTIONS.md) before modifying C# code.
+
+Before starting **and before approving** each phase, read the original specification in full, this file, the plan and the backend conventions. Request the original if it is unavailable. Identify the applicable source section and requirement in the plan's traceability matrix. Distinguish mandatory outcomes and evaluation criteria, optional features, illustrative examples and project-specific decisions. Label unresolved assumptions explicitly.
+
+Prefer the simplest maintainable approach that satisfies the assignment. Add functionality, dependencies or architectural complexity only when required for that outcome or explicitly approved. Preserve compatible approved decisions. If any decision conflicts with the assignment, report the discrepancy and obtain approval for the correction before changing the implementation.
+
+During implementation and review, keep the requirement, responsible component and verification evidence linked. At phase close, compare actual behavior with the original, record deviations and remaining work, and check coverage of every evaluation criterion through final delivery. Explain substantial design changes before editing and report actual verification results.
 
 ## Allowed projects and references
 

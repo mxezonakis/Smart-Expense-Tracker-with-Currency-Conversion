@@ -40,6 +40,12 @@ Use the provider publication time to bound quote age when available. Document th
 
 For statistics, propose GET /api/statistics returning completed request count, failure count and cumulative/mean duration in milliseconds. Count completed 4xx and 5xx responses as failures. Exclude the statistics endpoint from measurement. Place measurement around error handling so it observes the final response status. Report a mean of zero for an empty sample. Derive the mean from a single consistent snapshot.
 
+### Category contract (Phase 2)
+
+SQL Server generates integer IDs. Trim leading and trailing .NET whitespace with String.Trim, then require 1–100 UTF-16 code units. Preserve case, accents and interior whitespace. Store this display name directly. A check constraint rejects empty names and outer Unicode whitespace even for direct SQL writes. The unique index uses Latin1_General_100_CI_AS_SC (case-insensitive and accent-sensitive) independent of database default collation. List by ascending ID. The unique index arbitrates concurrent inserts and renames.
+
+POST /api/categories returns 201 with the resource and Location. GET collection/item returns 200. PUT replaces the name and DELETE removes the category, both returning 204. Missing items return 404, invalid writes return validation ProblemDetails (400), and duplicate creates/renames return conflict ProblemDetails (409). Phase 5 introduces the restrictive Expense foreign key and the referenced-category deletion conflict.
+
 ## Implementation phases
 
 | Phase | Acceptance criteria | Verification gate |
@@ -80,4 +86,4 @@ Test suite names below use their project suffix. API tests exercise the composed
 
 ## Decisions still to record
 
-Select the provider/feed and verify its update cadence, quote timestamps and suitability for the configured windows. Specify SQL precision and scale, supported input limits and midpoint rounding with examples. Finalize future-date handling, category name normalization, date-range inclusivity, page defaults/maximum and report filter parameters. Resolve each detail before implementing its affected phase. Phase 1 pins FluentAssertions 7.2.0 (Apache-2.0) in Directory.Packages.props.
+Select the provider/feed and verify its update cadence, quote timestamps and suitability for the configured windows. Specify SQL precision and scale, supported input limits and midpoint rounding with examples. Finalize future-date handling, date-range inclusivity, page defaults/maximum and report filter parameters. Resolve each detail before implementing its affected phase. Phase 1 pins FluentAssertions 7.2.0 (Apache-2.0) in Directory.Packages.props.

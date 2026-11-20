@@ -89,7 +89,8 @@ namespace SmartExpenseTracker.Integrations
             }
 
             return new ExchangeRateTable("ExchangeRate-API", baseCurrency,
-                publishedAt, normalized.ToFrozenDictionary(StringComparer.Ordinal));
+                publishedAt, normalized.ToFrozenDictionary(StringComparer.Ordinal),
+                feed.NextUpdateUnix is > 0 and <= 253402300799 ? DateTimeOffset.FromUnixTimeSeconds(feed.NextUpdateUnix.Value) : null);
         }
 
         private static bool IsCurrencyCode(string? value)
@@ -102,6 +103,7 @@ namespace SmartExpenseTracker.Integrations
             [property: JsonPropertyName("error-type")] string? ErrorType,
             [property: JsonPropertyName("base_code")] string? BaseCode,
             [property: JsonPropertyName("time_last_update_unix")] long PublishedUnix,
+            [property: JsonPropertyName("time_next_update_unix")] long? NextUpdateUnix,
             [property: JsonPropertyName("rates")] Dictionary<string, decimal>? Rates);
     }
 }

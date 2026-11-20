@@ -35,11 +35,21 @@ POST returns 201, a Location header and an object such as `{"id":1,"name":"Food"
 
 ## Solution layout
 
-Under `src/`, Api composes the host. Application owns workflow contracts. Persistence owns EF Core, migrations and SQL Server access. Integrations and Caching are reserved for exchange-rate HTTP access and rate caching. Under `tests/`, Application, Integrations and Caching each have a unit-test project. Api.IntegrationTests exercises host behavior.
+Under `src/`, Api composes the host. Application owns workflow contracts. Persistence owns EF Core, migrations and SQL Server access. Integrations owns the exchange-rate HTTP client and Caching coordinates refresh and fallback. Under `tests/`, Application, Integrations and Caching each have a unit-test project. Api.IntegrationTests exercises host behavior.
 
 ## Exchange-rate provider
 
 The registered provider retrieves a daily table for the requested base currency and retains the upstream UTC publication time. It exposes base currency units per unit of the quoted currency. For example, an upstream quote of 1.25 USD per EUR maps to 0.8 EUR per USD. Category requests and host startup do not contact the provider. The HTTP timeout defaults to 10 seconds and can be configured with `ExchangeRateApi__TimeoutSeconds` (1–120). No API key is required. [Rates By Exchange Rate API](https://www.exchangerate-api.com)
+
+## Rate caching and durable fallback
+
+Apply the EF Core migrations using the database update command above before resolving rates. Migration `20261120155857_AddRateSnapshots` targets SQL Server 2022 and stores one complete normalized table per provider and dataset base. The composite primary key and conditional update protect newer publications during concurrent saves.
+
+The resolver fetches on demand. A daily table stays fresh until its usable advertised next update. If the hint is missing, already past, or more than 30 hours after publication, the default refresh deadline is six hours after retrieval. The hard cutoff is always 48 hours from original publication. Re-fetching the same publication, reading SQL and serving fallback never extend that cutoff.
+
+During an outage, callers share one refresh per process. Eligible stale data carries a fallback flag. Without eligible data, resolution fails with `RateUnavailableException`. The default retry delay is 20 minutes and the shared I/O timeout is 30 seconds. A caller can cancel its own wait. Different API instances can refresh independently. Each optional SQL operation gets at most one quarter of the shared timeout (7.5 seconds by default). A failed or timed-out save leaves an eligible live table in memory. Restart recovery depends on a successful durable save. After provider failure, sequential misses skip both SQL and HTTP until the retry deadline. The next request then checks SQL again, so another process can supply a recovered snapshot.
+
+Configure the dataset base with `RateCache__BaseCurrency` (EUR by default). Duration overrides use `RateCache__RefreshInterval`, `RateCache__MaximumAge`, `RateCache__RetryInterval` and `RateCache__RefreshTimeout` in .NET TimeSpan format. The provider schedule takes precedence over the configured refresh interval while the hard cutoff applies to every table. Phase 4 exposes the resolver through dependency injection. Host startup and category endpoints remain independent of exchange-rate availability.
 
 ## Verify
 

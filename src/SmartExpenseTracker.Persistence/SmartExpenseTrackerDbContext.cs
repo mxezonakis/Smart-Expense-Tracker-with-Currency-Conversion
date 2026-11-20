@@ -12,6 +12,7 @@ namespace SmartExpenseTracker.Persistence
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             modelBuilder.ApplyConfiguration(new CategoryConfiguration());
+            modelBuilder.ApplyConfiguration(new RateSnapshotConfiguration());
         }
     }
 }

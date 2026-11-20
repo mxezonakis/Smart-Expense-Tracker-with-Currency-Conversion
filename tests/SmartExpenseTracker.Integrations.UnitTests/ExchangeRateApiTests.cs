@@ -16,6 +16,15 @@ namespace SmartExpenseTracker.Integrations.UnitTests
             """;
 
         [Test]
+        public async Task PreservesAdvertisedNextUpdateAsUtcMetadata()
+        {
+            var feed = _validFeed.Replace("\"rates\"", "\"time_next_update_unix\":1700086400,\"rates\"");
+            using var services = CreateServices((_, _) => Reply(feed));
+            var table = await FetchAsync(services);
+            Assert.That(table.NextUpdateAt!.Value.EqualsExact(DateTimeOffset.FromUnixTimeSeconds(1700086400)), Is.True);
+        }
+
+        [Test]
         public async Task LatestTableMapsTheRequestedBaseDirectionAndPublicationTime()
         {
             using var services = CreateServices((request, _) =>

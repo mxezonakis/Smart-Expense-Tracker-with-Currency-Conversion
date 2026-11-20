@@ -19,7 +19,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
     [NUnit.Framework.Category("SqlServer")]
     public sealed class CategoryApiTests
     {
-        private const string Route = "/api/categories";
+        private const string _route = "/api/categories";
         private MsSqlContainer _server = null!;
         private WebApplicationFactory<Program> _factory = null!;
         private HttpClient _client = null!;
@@ -86,11 +86,11 @@ namespace SmartExpenseTracker.Api.IntegrationTests
             var category = (await created.Content.ReadFromJsonAsync<CategoryResponse>(Token))!;
             category.Id.Should().BePositive();
             category.Name.Should().Be("Food");
-            location.AbsolutePath.Should().Be($"{Route}/{category.Id}");
+            location.AbsolutePath.Should().Be($"{_route}/{category.Id}");
             (await _client.GetFromJsonAsync<CategoryResponse>(location, Token)).Should().Be(category);
             using var second = await Create("Books");
             second.EnsureSuccessStatusCode();
-            var list = await _client.GetFromJsonAsync<CategoryResponse[]>(Route, Token);
+            var list = await _client.GetFromJsonAsync<CategoryResponse[]>(_route, Token);
             list!.Select(item => item.Name).Should().Equal("Food", "Books");
 
             using var updated = await _client.PutAsJsonAsync(location, new { name = " Dining " }, Token);
@@ -128,15 +128,15 @@ namespace SmartExpenseTracker.Api.IntegrationTests
             using var client = concurrentHost.CreateClient();
             var requests = new[]
             {
-                client.PostAsJsonAsync(Route, new { name = " Travel " }, Token),
-                client.PostAsJsonAsync(Route, new { name = "trAVEL" }, Token)
+                client.PostAsJsonAsync(_route, new { name = " Travel " }, Token),
+                client.PostAsJsonAsync(_route, new { name = "trAVEL" }, Token)
             };
             var responses = await Task.WhenAll(requests);
             barrier.BothWritesArrived.Should().BeTrue();
             using var created = responses.Single(response => response.StatusCode == HttpStatusCode.Created);
             using var conflict = responses.Single(response => response.StatusCode == HttpStatusCode.Conflict);
             await AssertProblem(conflict, HttpStatusCode.Conflict);
-            var list = await _client.GetFromJsonAsync<CategoryResponse[]>(Route, Token);
+            var list = await _client.GetFromJsonAsync<CategoryResponse[]>(_route, Token);
             list.Should().ContainSingle();
 
             using var second = await Create("Food");
@@ -196,7 +196,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
 
             using var upper = await Create(" CAFÉ ");
             await AssertProblem(upper, HttpStatusCode.Conflict);
-            var list = await _client.GetFromJsonAsync<CategoryResponse[]>(Route, Token);
+            var list = await _client.GetFromJsonAsync<CategoryResponse[]>(_route, Token);
             list!.Select(category => category.Name).Should().Equal("Cafe", "Café");
         }
 
@@ -238,7 +238,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
 
         private Task<HttpResponseMessage> Create(string? name)
         {
-            return _client.PostAsJsonAsync(Route, new { name }, Token);
+            return _client.PostAsJsonAsync(_route, new { name }, Token);
         }
 
         private static async Task<JsonElement> AssertProblem(HttpResponseMessage response, HttpStatusCode status)

@@ -11,6 +11,21 @@ namespace SmartExpenseTracker.Api.IntegrationTests
 {
     public sealed class ApiHostTests
     {
+        [TestCase("")]
+        [TestCase("?period=")]
+        [TestCase("?period=quarter")]
+        [TestCase("?period=1")]
+        public async Task InvalidReportPeriodReturnsValidationProblem(string query)
+        {
+            await using var factory = new WebApplicationFactory<Program>();
+            using var client = factory.CreateClient();
+            using var response = await client.GetAsync($"/api/reports/by-period{query}", TestContext.CurrentContext.CancellationToken);
+            response.StatusCode.Should().Be(System.Net.HttpStatusCode.BadRequest);
+            response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.CurrentContext.CancellationToken));
+            body.RootElement.GetProperty("errors").TryGetProperty("period", out _).Should().BeTrue();
+        }
+
         [TestCase("from=2030-02-01&to=2030-01-01")]
         [TestCase("from=invalid")]
         [TestCase("categoryId=0")]

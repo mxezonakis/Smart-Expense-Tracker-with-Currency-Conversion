@@ -87,3 +87,14 @@ dotnet package list --project SmartExpenseTracker.slnx --vulnerable --include-tr
 The full suite requires a running Docker Linux engine with support for the SQL Server 2022 x86-64 image, enough memory for SQL Server, and access to pull the image. The SqlServer fixture starts a disposable container and migrates an empty database per test. For the Docker-independent subset use `dotnet test SmartExpenseTracker.slnx --filter 'TestCategory!=SqlServer'`. The host tests run without Docker, SQL Server or a live currency provider. In restricted Windows environments, VSTest may be unable to connect to its test host, and the formatter may be denied access to its build-host named pipe. Run those checks in a terminal or CI runner that permits local process communication. The vulnerability audit requires access to current advisory data.
 
 See the [development workflow](AGENTS.md), [C# conventions](docs/DOTNET_BACKEND_INSTRUCTIONS.md) and [implementation plan](implementation-plan.md). The requirement source is the privately supplied assignment specification. Obtain it from the assignment owner and place the local copy under `docs/` when working on a phase.
+
+## Spending reports
+
+| GET endpoint | Successful response example |
+|---|---|
+| `/api/reports/by-category` | `[{"categoryId":1,"totalAmount":19.26,"baseCurrency":"EUR"}]` |
+| `/api/reports/by-period?period=week` | `[{"periodStart":"2028-12-25","totalAmount":19.26,"baseCurrency":"EUR"}]` |
+
+Reports cover the entire dataset. Category groups use ascending category ID. The required `period` parameter accepts exactly `day`, `week`, or `month` (lowercase). Periods use the stored expense date, including future dates, and appear in chronological order. The start is the expense date, the Monday of its week, or the first of its calendar month respectively. A missing or invalid period returns HTTP 400 with validation ProblemDetails.
+
+Each total is the decimal sum of the already rounded converted amounts in the dataset's persisted base currency. For example, 9.26 EUR and 10.00 EUR in one category give 19.26 EUR. A zero-cent snapshot contributes zero and still establishes its group. Groups without expenses are omitted. Both endpoints return HTTP 200 with `[]` for an empty dataset. Reading a report never fetches rates or updates an expense.

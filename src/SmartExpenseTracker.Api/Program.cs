@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Options;
 using SmartExpenseTracker.Application.Categories;
 using SmartExpenseTracker.Application.Expenses;
+using SmartExpenseTracker.Application.Reporting;
 using SmartExpenseTracker.Caching;
 using SmartExpenseTracker.Integrations;
 using SmartExpenseTracker.Persistence;
@@ -18,6 +19,7 @@ namespace SmartExpenseTracker.Api
             builder.Services.AddScoped<CategoryService>();
             builder.Services.AddSingleton(sp => new DatasetCurrency(sp.GetRequiredService<IOptions<RateCacheOptions>>().Value.BaseCurrency));
             builder.Services.AddScoped<ExpenseService>();
+            builder.Services.AddScoped<ReportService>();
             builder.Services.AddExceptionHandler<ApiExceptionHandler>();
             builder.Services.AddApi(builder.Configuration);
 

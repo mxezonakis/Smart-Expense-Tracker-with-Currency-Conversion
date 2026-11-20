@@ -160,6 +160,79 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         }
 
         [Test]
+        public async Task ReportsSumPersistedSnapshotsInSqlAcrossCalendarBoundaries()
+        {
+            using var category = await _client.PostAsJsonAsync("/api/categories", new { name = "Other" }, Token);
+            category.EnsureSuccessStatusCode();
+            int other = (await category.Content.ReadFromJsonAsync<CategoryResponse>(Token))!.Id;
+            var january = new DateOnly(2028, 1, 1);
+            var sunday = new DateOnly(2028, 12, 31);
+            var monday = sunday.AddDays(1);
+            var saturday = sunday.AddDays(-1);
+
+            // Insert in reverse chronological order. CHF 0.01 at 0.5 rounds half-even to EUR 0.00.
+            foreach (var expense in new[]
+            {
+                Input("EUR") with { Date = monday, Amount = 8m },
+                Input("EUR") with { Date = sunday, Amount = 1m },
+                Input("EUR") with { Date = saturday, Amount = 1m },
+                Input("USD") with { Date = sunday },
+                Input("CHF") with { Date = january, Amount = 0.01m, CategoryId = other }
+            })
+            {
+                using var result = await _client.PostAsJsonAsync(_route, expense, Token);
+                result.EnsureSuccessStatusCode();
+            }
+
+            var before = await _client.GetFromJsonAsync<ExpenseResponse[]>(_route, Token);
+            _rates.Available = false;
+            int calls = _rates.Calls;
+            var commands = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            using var reportHost = _factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+                services.ConfigureDbContext<SmartExpenseTrackerDbContext>(options => options.LogTo(commands.Enqueue,
+                    new[] { RelationalEventId.CommandExecuted }))));
+            using var reports = reportHost.CreateClient();
+            var categories = await reports.GetFromJsonAsync<CategoryTotalResponse[]>("/api/reports/by-category", Token);
+            categories!.Should().Equal(new CategoryTotalResponse(_category, 19.26m, "EUR"), new CategoryTotalResponse(other, 0m, "EUR"));
+
+            async Task CheckPeriods(string period, params PeriodTotalResponse[] expected)
+            {
+                var totals = await reports.GetFromJsonAsync<PeriodTotalResponse[]>($"/api/reports/by-period?period={period}", Token);
+                totals!.Should().Equal(expected);
+            }
+
+            await CheckPeriods("day", new(january, 0m, "EUR"), new(saturday, 1m, "EUR"),
+                new(sunday, 10.26m, "EUR"), new(monday, 8m, "EUR"));
+            await CheckPeriods("week", new(new DateOnly(2027, 12, 27), 0m, "EUR"),
+                new(new DateOnly(2028, 12, 25), 11.26m, "EUR"), new(monday, 8m, "EUR"));
+            await CheckPeriods("month", new(january, 0m, "EUR"), new(new DateOnly(2028, 12, 1), 11.26m, "EUR"), new(monday, 8m, "EUR"));
+
+            commands.Should().HaveCount(4);
+            foreach (var command in commands)
+            {
+                command.Should().Contain("GROUP BY").And.Contain("SUM(").And.Contain("ConvertedAmount").And.Contain("ORDER BY");
+            }
+
+            (await _client.GetFromJsonAsync<ExpenseResponse[]>(_route, Token))!.Should().Equal(before!);
+            _rates.Calls.Should().Be(calls);
+        }
+
+        [Test]
+        public async Task ReportsReturnEmptyArraysForEmptyDataset()
+        {
+            foreach (string route in new[] { "by-category", "by-period?period=day", "by-period?period=week", "by-period?period=month" })
+            {
+                using var response = await _client.GetAsync($"/api/reports/{route}", Token);
+                response.StatusCode.Should().Be(HttpStatusCode.OK);
+                (await response.Content.ReadFromJsonAsync<object[]>(Token)).Should().BeEmpty();
+            }
+
+            using var invalid = await _client.GetAsync("/api/reports/by-period?period=year", Token);
+            await AssertProblem(invalid, HttpStatusCode.BadRequest);
+            _rates.Calls.Should().Be(0);
+        }
+
+        [Test]
         public async Task IdentityCrudAndReferencedCategoryRestriction()
         {
             var input = Input(" eur ");
@@ -442,6 +515,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
                 {
                     ["EUR"] = 1m,
                     ["USD"] = 0.925500000001m,
+                    ["CHF"] = 0.5m,
                     ["GBP"] = 1.25m
                 }.ToFrozenDictionary());
                 return new ResolvedRates(new RateSnapshot(table, Publication), true);

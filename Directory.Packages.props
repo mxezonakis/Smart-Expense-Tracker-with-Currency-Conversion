@@ -3,6 +3,7 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
   <ItemGroup>
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.9" />
     <!-- SqlClient 6.1.8 requires PKCS >= 9.0.21 on the selected net9.0 asset. -->
     <PackageVersion Include="Microsoft.Data.SqlClient" Version="6.1.8" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.9" />

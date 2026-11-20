@@ -1,4 +1,5 @@
 using SmartExpenseTracker.Application.Categories;
+using SmartExpenseTracker.Integrations;
 using SmartExpenseTracker.Persistence;
 
 namespace SmartExpenseTracker.Api
@@ -9,6 +10,7 @@ namespace SmartExpenseTracker.Api
         {
             var builder = WebApplication.CreateBuilder(args);
             builder.Services.AddPersistence(builder.Configuration);
+            builder.Services.AddIntegrations(builder.Configuration);
             builder.Services.AddScoped<CategoryService>();
             builder.Services.AddExceptionHandler<CategoryExceptionHandler>();
             builder.Services.AddApi(builder.Configuration);

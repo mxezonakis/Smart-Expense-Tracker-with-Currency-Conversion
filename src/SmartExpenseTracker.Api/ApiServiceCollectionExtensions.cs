@@ -27,6 +27,15 @@ namespace SmartExpenseTracker.Api
                     name.Examples = [JsonValue.Create("  Café  ")!];
                 }
 
+                if (context.JsonTypeInfo.Type == typeof(ExpenseRequest) && schema.Properties?["amount"] is OpenApiSchema amount)
+                {
+                    amount.Type = JsonSchemaType.Number;
+                    amount.Minimum = "0.01";
+                    amount.Maximum = "99999999.99";
+                    amount.MultipleOf = 0.01m;
+                    amount.Description = "Original amount in whole cents.";
+                }
+
                 return Task.CompletedTask;
             }));
             services.AddOptions<OpenApiOptions>("v1")

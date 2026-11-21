@@ -44,10 +44,11 @@ dotnet build SmartExpenseTracker.slnx --configuration Release --no-restore -warn
 # Install once if dotnet-ef is unavailable
 dotnet tool install --global dotnet-ef --version 10.0.9
 dotnet ef database update --project src/SmartExpenseTracker.Persistence --startup-project src/SmartExpenseTracker.Api --configuration Release --no-build
+$env:ASPNETCORE_ENVIRONMENT = 'Development'
 dotnet run --project src/SmartExpenseTracker.Api --configuration Release --no-build --no-launch-profile --urls http://localhost:54131
 ```
 
-Open [the OpenAPI document](http://localhost:54131/openapi/v1.json). The document covers all 13 business operations across categories, expenses, reports and statistics. It is JSON OpenAPI, not an interactive Swagger UI. The host validates the configured API documentation title at startup.
+Open [Swagger UI](http://localhost:54131/swagger) for interactive documentation and manual testing. Swagger UI is enabled only in Development; keep production deployments in Production. It uses the existing [OpenAPI JSON document](http://localhost:54131/openapi/v1.json), whose availability is unchanged. The document covers all 13 business operations across categories, expenses, reports and statistics. The host validates the configured API documentation title at startup.
 
 ## API reference
 

@@ -5,6 +5,12 @@ using SmartExpenseTracker.Application.Expenses;
 
 namespace SmartExpenseTracker.Api.Contracts
 {
+    /// <summary>Original expense fields used for creation and replacement.</summary>
+    /// <param name="Amount">Positive original amount from 0.01 to 99999999.99 in whole cents.</param>
+    /// <param name="Currency">Three ASCII letters, trimmed and normalized to uppercase. Foreign currencies must be present in an eligible rate table.</param>
+    /// <param name="CategoryId">The identifier of an existing category.</param>
+    /// <param name="Date">Expense calendar date in yyyy-MM-dd format. Future dates are accepted; this does not request historical rates.</param>
+    /// <param name="Description">Optional text, trimmed to at most 500 UTF-16 code units. Omitted, null or blank becomes null.</param>
     public sealed record ExpenseRequest(
         [property: JsonRequired, JsonConverter(typeof(ExpenseAmountConverter))]
         [property: Description("Positive original amount in whole cents, up to 99999999.99.")]
@@ -42,6 +48,20 @@ namespace SmartExpenseTracker.Api.Contracts
         }
     }
 
+    /// <summary>A stored expense and its conversion snapshot.</summary>
+    /// <remarks>Reads and metadata-only edits preserve this snapshot. Rates are provider-published observations, not continuously streaming quotes.</remarks>
+    /// <param name="Id">The database-generated expense identifier.</param>
+    /// <param name="Amount">The original amount in whole cents.</param>
+    /// <param name="Currency">The normalized original currency code.</param>
+    /// <param name="CategoryId">The referenced category identifier.</param>
+    /// <param name="Date">The expense calendar date in yyyy-MM-dd format.</param>
+    /// <param name="Description">The trimmed optional description, or null.</param>
+    /// <param name="BaseCurrency">The dataset base currency used for this conversion; EUR by default.</param>
+    /// <param name="AppliedRate">Base-currency units per original-currency unit, rounded half-to-even to 12 decimal places. Base-to-base conversion uses 1.</param>
+    /// <param name="ConvertedAmount">Original amount multiplied by the stored applied rate, rounded once to cents using half-to-even rounding. May be zero for a small positive expense.</param>
+    /// <param name="Provider">The exchange-rate provider name, or null for base-to-base conversion.</param>
+    /// <param name="PublishedAt">The original provider publication timestamp in UTC, or null for base-to-base conversion. This is not the expense date or retrieval time.</param>
+    /// <param name="IsFallback">True when this conversion used an eligible last-known rate after refresh failure. False for base-to-base conversion.</param>
     public sealed record ExpenseResponse(int Id, decimal Amount, string Currency, int CategoryId, DateOnly Date,
         string? Description, string BaseCurrency, decimal AppliedRate, decimal ConvertedAmount, string? Provider,
         DateTimeOffset? PublishedAt, bool IsFallback)

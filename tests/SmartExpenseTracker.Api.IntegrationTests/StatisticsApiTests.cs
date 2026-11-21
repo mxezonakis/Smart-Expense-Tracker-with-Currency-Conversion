@@ -17,6 +17,23 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         private static CancellationToken Token => TestContext.CurrentContext.CancellationToken;
 
         [Test]
+        public async Task ProductionProblemOmitsPrivateExceptionDetails()
+        {
+            const string privateDetail = "private-database-diagnostic-canary";
+            using var factory = new WebApplicationFactory<Program>();
+            using var host = factory.WithWebHostBuilder(builder => builder.UseEnvironment("Production")
+                .ConfigureServices(services => services.AddScoped<IReportStore>(_ => throw new InvalidOperationException(privateDetail))));
+            using var client = host.CreateClient();
+            using var response = await client.GetAsync("/api/reports/by-category", Token);
+            response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+            response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
+            var body = await response.Content.ReadAsStringAsync(Token);
+            body.Should().NotContain(privateDetail).And.NotContain(nameof(InvalidOperationException));
+            using var problem = JsonDocument.Parse(body);
+            problem.RootElement.GetProperty("status").GetInt32().Should().Be(500);
+        }
+
+        [Test]
         public async Task SnapshotReadsAreExcludedAndHostsHaveIndependentCounters()
         {
             using var first = new WebApplicationFactory<Program>();

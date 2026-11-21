@@ -80,6 +80,23 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         private ExpenseRequest Input(string currency) => new ExpenseRequest(10m, currency, _category, new DateOnly(2030, 1, 2), null);
 
         [Test]
+        public async Task SqlLikeCategoryAndDescriptionRoundTripAsLiteralText()
+        {
+            const string literal = "O'Brien; SELECT N'fare' --";
+            using var created = await _client.PostAsJsonAsync("/api/categories", new { name = literal }, Token);
+            created.StatusCode.Should().Be(HttpStatusCode.Created);
+            var category = (await created.Content.ReadFromJsonAsync<CategoryResponse>(Token))!;
+            using var expense = await _client.PostAsJsonAsync(_route, Input("EUR") with { CategoryId = category.Id, Description = literal }, Token);
+            expense.StatusCode.Should().Be(HttpStatusCode.Created);
+
+            var stored = await _client.GetFromJsonAsync<ExpenseResponse>(expense.Headers.Location, Token);
+            stored!.Description.Should().Be(literal);
+            stored.CategoryId.Should().Be(category.Id);
+            var categories = await _client.GetFromJsonAsync<CategoryResponse[]>("/api/categories", Token);
+            categories.Should().BeEquivalentTo(new[] { new CategoryResponse(_category, "Travel"), new CategoryResponse(category.Id, literal) });
+        }
+
+        [Test]
         public async Task MigratedExpensesTableHasExpectedQueryIndexKeys()
         {
             using var scope = _factory.Services.CreateScope();

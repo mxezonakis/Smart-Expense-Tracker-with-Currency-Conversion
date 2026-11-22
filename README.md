@@ -155,9 +155,16 @@ Apply the EF Core migrations using the database update command above before reso
 
 The resolver fetches on demand. A daily table stays fresh until its usable advertised next update. If the hint is missing, already past, or more than 30 hours after publication, the default refresh deadline is six hours after retrieval. The maximum quote age defaults to 48 hours from original publication and is configurable through `RateCache__MaximumAge`. Re-fetching the same publication, reading SQL and serving fallback never extend that cutoff.
 
-During an outage, callers share one refresh per process. Eligible stale data carries a fallback flag. Without eligible data, resolution fails with `RateUnavailableException`. The default retry delay is 20 minutes and the shared I/O timeout is 30 seconds. A caller can cancel its own wait. Different API instances can refresh independently. Each optional SQL operation gets at most one quarter of the shared timeout (7.5 seconds by default). A failed or timed-out save leaves an eligible live table in memory. Restart recovery depends on a successful durable save. After provider failure, sequential misses skip both SQL and HTTP until the retry deadline. The next request then checks SQL again, so another process can supply a recovered snapshot.
+During an outage, callers share one refresh per process. Eligible stale data carries a fallback flag. Without eligible data, resolution fails with `RateUnavailableException`. The retry cooldown defaults to 20 minutes for HTTP 429 Too Many Requests and 2 minutes for other handled refresh failures (other HTTP errors, network failures, timeouts/cancellation of the shared refresh, and invalid responses). The cooldown starts when the failure is handled; the first request at or after its deadline can refresh. No automatic Retry-After handling is performed. The shared I/O timeout remains 30 seconds. A caller can cancel its own wait. Different API instances can refresh independently. Each optional SQL operation gets at most one quarter of the shared timeout (7.5 seconds by default). A failed or timed-out save leaves an eligible live table in memory. Restart recovery depends on a successful durable save. After provider failure, sequential misses skip both SQL and HTTP until the retry deadline. The next request then checks SQL again, so another process can supply a recovered snapshot.
 
-Configure the dataset base with `RateCache__BaseCurrency` (EUR by default). Duration overrides use `RateCache__RefreshInterval`, `RateCache__MaximumAge`, `RateCache__RetryInterval` and `RateCache__RefreshTimeout` in .NET TimeSpan format. The provider schedule takes precedence over the configured refresh interval while the hard cutoff applies to every table. Host startup and category endpoints remain independent of exchange-rate availability.
+Configure the dataset base with `RateCache__BaseCurrency` (EUR by default). Duration overrides use `RateCache__RefreshInterval`, `RateCache__MaximumAge`, `RateCache__RetryInterval`, `RateCache__RateLimitRetryInterval` and `RateCache__RefreshTimeout` in .NET TimeSpan format. The provider schedule takes precedence over the configured refresh interval while the hard cutoff applies to every table. Host startup and category endpoints remain independent of exchange-rate availability. Both retry intervals must be positive and less than MaximumAge. For example, these PowerShell settings explicitly select the defaults:
+
+```powershell
+$env:RateCache__RetryInterval = '00:02:00'
+$env:RateCache__RateLimitRetryInterval = '00:20:00'
+```
+
+An existing RetryInterval override now applies only to non-429 failures; configure RateLimitRetryInterval separately for HTTP 429. Neither cooldown extends a quote's maximum acceptable age.
 
 ## Verify
 

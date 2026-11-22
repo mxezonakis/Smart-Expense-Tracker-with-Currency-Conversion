@@ -71,7 +71,7 @@ namespace SmartExpenseTracker.Persistence
 
         private IQueryable<Expense> BuildListQuery(ExpenseQuery query)
         {
-            var rows = Expenses.AsNoTracking();
+            IQueryable<ExpenseRow> rows = Expenses;
             if (query.From is { } from)
             {
                 rows = rows.Where(row => row.Date >= from);

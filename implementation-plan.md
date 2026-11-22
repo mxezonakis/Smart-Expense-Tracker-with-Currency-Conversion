@@ -147,3 +147,15 @@ A fresh clone of approved Phase 8 merge `41d8a0fe1870c696e44e6814e2ab5ada518139e
 The live walkthrough also verified snapshot-preserving metadata edits, stored data after restart, dataset base binding after deleting all expenses, conflict/validation/not-found responses and statistics reset/exclusion. Automated tests remain independent of the live provider. Testcontainers failures are not counted as successful SQL verification: all 29 SQL cases actually passed here.
 
 Only README and this plan were corrected in Phase 9. No production implementation, tests, packages or published migrations changed. Final submission and any commit/push remain gated on independent final review. Optional features would add security/schema or scheduling/lifecycle complexity and delay delivery; none is necessary to satisfy mandatory requirements.
+
+## Approved extension ? conditional expense writes
+
+The assignment's concurrency evaluation criterion is addressed by the existing cache, statistics and SQL tests. ETag/If-Match is an explicitly selected additional consistency decision, not a newly inferred mandatory assignment feature. It extends the single-read expense update in the same worktree without schema changes.
+
+- API owns bounded parsing of exactly one quoted strong ETag, response headers and 400/428/412 ProblemDetails. Swagger documents the required header. Expense JSON stays unchanged.
+- Application compares the expected version before validation and rate resolution. Persistence retains the matched original rowversion for EF's guarded UPDATE, including no-op writes; generated versions supply response ETags without rereads.
+- DELETE checks ID and expected rowversion atomically. Zero affected rows returns 412, including an absent resource; initial PUT/GET absence returns 404. Unrelated conflicts retain 409.
+- Individual GET or POST supplies an ETag; list clients retrieve the individual resource first. This intentionally breaks unconditional expense PUT/DELETE clients.
+- Verification: ExpensePreconditionTests covers rejected headers before I/O; ExpenseApiTests covers real SQL rowversions, stale clients, intervening writes/deletes, no-op writes, competing requests, preserved snapshots and command counts; OpenApiDocumentationTests checks generated header contracts. Final verification results are reported at review, separately from historical Phase 9 counts above.
+
+No authentication, multi-user support, background jobs, migrations or unrelated product features are added. Changes remain uncommitted pending independent review.

@@ -10,6 +10,34 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         private static CancellationToken Token => TestContext.CurrentContext.CancellationToken;
 
         [Test]
+        public async Task GeneratedDocumentExposesConditionalHeaders()
+        {
+            await using var factory = new WebApplicationFactory<Program>();
+            using var client = factory.CreateClient();
+            using var response = await client.GetAsync("/openapi/v1.json", Token);
+            response.EnsureSuccessStatusCode();
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(Token));
+            var paths = document.RootElement.GetProperty("paths");
+            foreach (var method in new[] { "put", "delete" })
+            {
+                var header = paths.GetProperty("/api/expenses/{id}").GetProperty(method).GetProperty("parameters")
+                    .EnumerateArray().Single(parameter => parameter.GetProperty("name").GetString() == "If-Match");
+                header.GetProperty("in").GetString().Should().Be("header");
+                header.GetProperty("required").GetBoolean().Should().BeTrue();
+                header.GetProperty("description").GetString().Should().Contain("strong").And.Contain("428").And.Contain("412");
+                header.GetProperty("example").GetString().Should().Be("\"AAAAAAAAB9E=\"");
+            }
+
+            foreach (var (path, method, status) in new[] { ("/api/expenses", "post", "201"),
+                ("/api/expenses/{id}", "get", "200"), ("/api/expenses/{id}", "put", "204") })
+            {
+                paths.GetProperty(path).GetProperty(method).GetProperty("responses").GetProperty(status)
+                    .GetProperty("headers").GetProperty("ETag").GetProperty("description").GetString()
+                    .Should().Contain("If-Match");
+            }
+        }
+
+        [Test]
         public async Task GeneratedDocumentDescribesEveryOperationAndItsActualResponses()
         {
             await using var factory = new WebApplicationFactory<Program>();
@@ -28,8 +56,8 @@ namespace SmartExpenseTracker.Api.IntegrationTests
                 ("/api/expenses", "post", "Create an expense with a conversion snapshot.", ["201", "400", "409", "503"]),
                 ("/api/expenses", "get", "List, filter and sort expenses.", ["200", "400"]),
                 ("/api/expenses/{id}", "get", "Get an expense and its stored conversion.", ["200", "404"]),
-                ("/api/expenses/{id}", "put", "Update an expense.", ["204", "400", "404", "409", "503"]),
-                ("/api/expenses/{id}", "delete", "Delete an expense.", ["204", "404"]),
+                ("/api/expenses/{id}", "put", "Update an expense.", ["204", "400", "404", "409", "412", "428", "503"]),
+                ("/api/expenses/{id}", "delete", "Delete an expense.", ["204", "400", "412", "428"]),
                 ("/api/reports/by-category", "get", "Get total spending by category.", ["200"]),
                 ("/api/reports/by-period", "get", "Get total spending by calendar period.", ["200", "400"]),
                 ("/api/statistics", "get", "Get request statistics.", ["200"])

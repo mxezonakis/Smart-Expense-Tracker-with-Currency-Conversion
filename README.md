@@ -94,7 +94,7 @@ A base-currency request can use the same body with currency EUR. Its response sh
 {"id":1,"amount":10,"currency":"EUR","categoryId":1,"date":"2026-11-20","description":"Train ticket","baseCurrency":"EUR","appliedRate":1,"convertedAmount":10,"provider":null,"publishedAt":null,"isFallback":false}
 ```
 
-A USD response has the same fields with its applied rate, converted amount, provider publication timestamp and fallback flag. IDs and live rate values vary. The 201 response includes a Location and the saved expense. GET /api/expenses returns a JSON array of expenses. GET, PUT and DELETE /api/expenses/{id} read, replace and delete one expense. PUT takes the same body as POST. Successful PUT and DELETE return 204.
+A USD response has the same fields with its applied rate, converted amount, provider publication timestamp and fallback flag. IDs and live rate values vary. The 201 response includes Location, the saved expense and its strong ETag. Individual GET responses also include ETag; the JSON body is unchanged. GET /api/expenses returns a JSON array of expenses. GET, PUT and DELETE /api/expenses/{id} read, replace and delete one expense. PUT takes the same body as POST. Successful PUT and DELETE return 204.
 
 Example: `GET /api/expenses?from=2026-01-01&to=2026-01-31&categoryId=2&currency=usd&sortBy=amount&direction=asc`.
 
@@ -104,7 +104,42 @@ Amounts range from 0.01 to 99,999,999.99 in whole cents. The API trims and upper
 
 The first expense binds the database to the configured base currency. EUR is the default. An identity conversion uses rate 1 without a quote. Foreign expenses store the eligible provider rate rounded half-to-even to 12 decimal places, provider, original publication time and fallback flag. Multiply by that stored rate and round half-to-even to cents. For example, 10 USD at 0.9255 EUR/USD becomes 9.26 EUR. An eligible fallback uses the same arithmetic.
 
-Changing amount or currency obtains a new conversion. Date, category and description edits preserve the entire snapshot even during an outage. An unavailable rate returns 503 and leaves the expense unchanged. Invalid fields, missing category references and unsupported currencies return 400. Missing expenses return 404. Deleting a referenced category, changing the dataset base for a create/update, or encountering a conflicting concurrent edit returns 409.
+Changing amount or currency obtains a new conversion. Date, category and description edits preserve the entire snapshot even during an outage. An unavailable rate returns 503 and leaves the expense unchanged. Invalid fields, missing category references and unsupported currencies return 400. Individual GET and initially missing PUT resources return 404. Deleting a referenced category or changing the dataset base for a create/update returns 409. Expense precondition failures return 412.
+
+### Conditional expense updates and deletes
+
+Every expense PUT and DELETE requires `If-Match` containing exactly one quoted strong ETag from that expense's GET or POST response. Missing headers return 428; malformed tags, weak tags, `*` and multiple tags return 400. Tags are opaque to clients. A stale tag returns 412 without changing data or resolving exchange rates. Clients using the list endpoint must retrieve the individual expense and its ETag before editing; the collection does not supply individual version tokens.
+
+For example, retrieve the expense and copy the actual ETag response header (the token below is illustrative):
+
+```http
+GET /api/expenses/1
+
+HTTP/1.1 200 OK
+ETag: "AAAAAAAAB9E="
+```
+
+Send that complete quoted value with the replacement body:
+
+```http
+PUT /api/expenses/1
+If-Match: "AAAAAAAAB9E="
+Content-Type: application/json
+
+{"amount":10.00,"currency":"USD","categoryId":1,"date":"2026-11-20","description":"Updated ticket"}
+```
+
+Successful PUT returns 204 and a new ETag. For deletion, GET the current expense again and use its returned ETag (or use the new ETag from the successful PUT):
+
+```http
+DELETE /api/expenses/1
+If-Match: "AAAAAAAAB9I="
+```
+
+Successful DELETE returns 204. A delete with a nonmatching version, including an already absent expense, returns 412. It uses one atomic SQL DELETE with both ID and expected version, without a preceding read.
+
+PUT reads the expense and SQL Server rowversion once, compares it with the client's tag before validation/rate resolution, and preserves that version until the guarded UPDATE. Concurrent modification or deletion during PUT also returns 412. Identical-value PUTs still perform a guarded write and return a new ETag. This protects both GET-to-PUT edits and changes during PUT; it does not merge competing edits. On 412, retrieve current data and reconcile before retrying. Existing clients must supply these headers; unconditional expense writes are no longer supported. Category operations are unchanged.
+
 
 ## Solution layout
 

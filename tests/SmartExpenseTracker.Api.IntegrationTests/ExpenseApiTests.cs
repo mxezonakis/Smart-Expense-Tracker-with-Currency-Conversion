@@ -1,4 +1,5 @@
 using System.Collections.Frozen;
+using System.Data.Common;
 using System.Net;
 using System.Net.Http.Json;
 using FluentAssertions;
@@ -78,6 +79,434 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         }
 
         private ExpenseRequest Input(string currency) => new ExpenseRequest(10m, currency, _category, new DateOnly(2030, 1, 2), null);
+
+        private async Task<HttpResponseMessage> PutExpenseAsync(HttpClient client, Uri? uri, ExpenseRequest input, CancellationToken token)
+        {
+            using var current = await _client.GetAsync(uri, token);
+            current.EnsureSuccessStatusCode();
+            return await SendConditionalAsync(client, HttpMethod.Put, uri, input, current.Headers.ETag!.ToString(), token);
+        }
+
+        private async Task<HttpResponseMessage> DeleteExpenseAsync(HttpClient client, Uri? uri, CancellationToken token)
+        {
+            using var current = await _client.GetAsync(uri, token);
+            current.EnsureSuccessStatusCode();
+            return await SendConditionalAsync(client, HttpMethod.Delete, uri, null, current.Headers.ETag!.ToString(), token);
+        }
+
+        private static async Task<HttpResponseMessage> SendConditionalAsync(HttpClient client, HttpMethod method, Uri? uri,
+            ExpenseRequest? input, string etag, CancellationToken token)
+        {
+            using var request = new HttpRequestMessage(method, uri);
+            request.Headers.TryAddWithoutValidation("If-Match", etag);
+            if (input is not null)
+            {
+                request.Content = JsonContent.Create(input);
+            }
+
+            return await client.SendAsync(request, token);
+        }
+
+        [Test]
+        public async Task PostAndGetReturnExactPersistedEtagsWithoutExtraExpenseReads()
+        {
+            var observer = new UpdateCommandObserver();
+            await using var observed = ObserveUpdates(observer);
+            using var client = observed.CreateClient();
+            using var created = await client.PostAsJsonAsync(_route, Input("EUR"), Token);
+            created.StatusCode.Should().Be(HttpStatusCode.Created);
+            var expense = (await created.Content.ReadFromJsonAsync<ExpenseResponse>(Token))!;
+            var tag = created.Headers.ETag!;
+            tag.IsWeak.Should().BeFalse();
+            tag.Tag.Should().Be($"\"{Convert.ToBase64String(await ReadVersionAsync(expense.Id))}\"");
+            observer.Commands.Should().NotContain(sql => sql.Contains("FROM [Expenses]", StringComparison.Ordinal));
+            observer.Commands.Clear();
+
+            using var first = await client.GetAsync(created.Headers.Location, Token);
+            using var second = await _client.GetAsync(created.Headers.Location, Token);
+
+            first.StatusCode.Should().Be(HttpStatusCode.OK);
+            first.Headers.ETag.Should().Be(tag);
+            second.Headers.ETag.Should().Be(tag);
+            (await first.Content.ReadFromJsonAsync<ExpenseResponse>(Token)).Should().Be(expense);
+            observer.Commands.Should().ContainSingle().Which.Should().Contain("[Version]").And.Contain("FROM [Expenses]");
+            using var list = await _client.GetAsync(_route, Token);
+            list.Headers.ETag.Should().BeNull();
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public async Task StaleClientCannotOverwriteOrDeleteNewerExpense(bool noOp)
+        {
+            var input = Input("USD");
+            using var created = await _client.PostAsJsonAsync(_route, input, Token);
+            created.EnsureSuccessStatusCode();
+            using var clientARead = await _client.GetAsync(created.Headers.Location, Token);
+            using var clientBRead = await _client.GetAsync(created.Headers.Location, Token);
+            clientARead.Headers.ETag.Should().Be(clientBRead.Headers.ETag);
+            var staleTag = clientARead.Headers.ETag!.ToString();
+            using var changed = await SendConditionalAsync(_client, HttpMethod.Put, created.Headers.Location,
+                input with { Amount = 20m }, clientBRead.Headers.ETag!.ToString(), Token);
+            changed.StatusCode.Should().Be(HttpStatusCode.NoContent);
+            changed.Headers.ETag!.ToString().Should().NotBe(staleTag);
+            var winner = (await _client.GetFromJsonAsync<ExpenseResponse>(created.Headers.Location, Token))!;
+            var version = await ReadVersionAsync(winner.Id);
+            var calls = _rates.Calls;
+            _rates.Available = false;
+            var observer = new UpdateCommandObserver();
+            await using var observed = ObserveUpdates(observer);
+            using var client = observed.CreateClient();
+
+            using var stalePut = await SendConditionalAsync(client, HttpMethod.Put, created.Headers.Location,
+                input with { Amount = noOp ? 20m : 10m }, staleTag, Token);
+            await AssertProblem(stalePut, HttpStatusCode.PreconditionFailed);
+            observer.Commands.Should().ContainSingle().Which.Should().Contain("FROM [Expenses]");
+            observer.Commands.Clear();
+            using var staleDelete = await SendConditionalAsync(client, HttpMethod.Delete, created.Headers.Location, null, staleTag, Token);
+            await AssertProblem(staleDelete, HttpStatusCode.PreconditionFailed);
+            observer.Commands.Should().ContainSingle().Which.Should().Contain("DELETE").And.Contain("[Version]");
+            _rates.Calls.Should().Be(calls);
+            (await _client.GetFromJsonAsync<ExpenseResponse>(created.Headers.Location, Token)).Should().Be(winner);
+            (await ReadVersionAsync(winner.Id)).Should().Equal(version);
+        }
+
+        [Test]
+        public async Task ConditionalDeleteUsesClientVersionAtomicallyWithoutReadingExpense()
+        {
+            using var created = await _client.PostAsJsonAsync(_route, Input("EUR"), Token);
+            created.EnsureSuccessStatusCode();
+            var expense = (await created.Content.ReadFromJsonAsync<ExpenseResponse>(Token))!;
+            var version = await ReadVersionAsync(expense.Id);
+            var observer = new UpdateCommandObserver();
+            await using var observed = ObserveUpdates(observer);
+            using var client = observed.CreateClient();
+            using var deleted = await SendConditionalAsync(client, HttpMethod.Delete, created.Headers.Location, null,
+                created.Headers.ETag!.ToString(), Token);
+            deleted.StatusCode.Should().Be(HttpStatusCode.NoContent);
+            observer.Commands.Should().ContainSingle().Which.Should().Contain("DELETE").And.Contain("[Id]").And.Contain("[Version]");
+            observer.DeleteVersion.Should().Equal(version);
+            TestContext.Out.WriteLine(observer.Commands.Single());
+            using var missing = await _client.GetAsync(created.Headers.Location, Token);
+            await AssertProblem(missing, HttpStatusCode.NotFound);
+            using var repeat = await SendConditionalAsync(client, HttpMethod.Delete, created.Headers.Location, null,
+                created.Headers.ETag.ToString(), Token);
+            await AssertProblem(repeat, HttpStatusCode.PreconditionFailed);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public async Task CompetingConditionalWritesAllowOnlyOneWinner(bool deleteCompetitor)
+        {
+            var input = Input("EUR");
+            using var created = await _client.PostAsJsonAsync(_route, input, Token);
+            created.EnsureSuccessStatusCode();
+            var etag = created.Headers.ETag!.ToString();
+            var version = Convert.FromBase64String(etag[1..^1]);
+            var bothReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var arrived = 0;
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(Token);
+            deadline.CancelAfter(TimeSpan.FromSeconds(30));
+            async Task Gate(CancellationToken token)
+            {
+                if (Interlocked.Increment(ref arrived) == 2)
+                {
+                    bothReady.SetResult();
+                }
+
+                await bothReady.Task.WaitAsync(token);
+            }
+
+            var firstObserver = new UpdateCommandObserver { BeforeUpdate = Gate };
+            var secondObserver = new UpdateCommandObserver { BeforeUpdate = Gate, BeforeDelete = Gate };
+            await using var firstHost = ObserveUpdates(firstObserver);
+            await using var secondHost = ObserveUpdates(secondObserver);
+            using var firstClient = firstHost.CreateClient();
+            using var secondClient = secondHost.CreateClient();
+            var firstInput = input with { Description = "First writer" };
+            var secondInput = input with { Description = "Second writer" };
+            var firstTask = SendConditionalAsync(firstClient, HttpMethod.Put, created.Headers.Location, firstInput, etag, deadline.Token);
+            var secondTask = SendConditionalAsync(secondClient, deleteCompetitor ? HttpMethod.Delete : HttpMethod.Put,
+                created.Headers.Location, deleteCompetitor ? null : secondInput, etag, deadline.Token);
+            await Task.WhenAll(firstTask, secondTask);
+            using var first = await firstTask;
+            using var second = await secondTask;
+            new[] { first.StatusCode, second.StatusCode }.Should().BeEquivalentTo(new[] { HttpStatusCode.NoContent, HttpStatusCode.PreconditionFailed });
+            firstObserver.AssertSingleReadAndVersion(version);
+            if (deleteCompetitor)
+            {
+                secondObserver.Commands.Should().ContainSingle().Which.Should().Contain("DELETE");
+                secondObserver.DeleteVersion.Should().Equal(version);
+            }
+            else
+            {
+                secondObserver.AssertSingleReadAndVersion(version);
+            }
+
+            if (deleteCompetitor && second.IsSuccessStatusCode)
+            {
+                using var missing = await _client.GetAsync(created.Headers.Location, Token);
+                await AssertProblem(missing, HttpStatusCode.NotFound);
+            }
+            else
+            {
+                var persisted = await _client.GetFromJsonAsync<ExpenseResponse>(created.Headers.Location, Token);
+                persisted!.Description.Should().Be(first.IsSuccessStatusCode ? "First writer" : "Second writer");
+                persisted.Amount.Should().Be(10m);
+                persisted.ConvertedAmount.Should().Be(10m);
+            }
+        }
+
+        [Test]
+        public async Task MatchingVersionStillReturnsConflictForDifferentDatasetBase()
+        {
+            using var created = await _client.PostAsJsonAsync(_route, Input("EUR"), Token);
+            created.EnsureSuccessStatusCode();
+            var before = (await created.Content.ReadFromJsonAsync<ExpenseResponse>(Token))!;
+            await using var changed = WithBaseCurrency("GBP");
+            using var client = changed.CreateClient();
+            using var response = await SendConditionalAsync(client, HttpMethod.Put, created.Headers.Location, Input("EUR"),
+                created.Headers.ETag!.ToString(), Token);
+            await AssertProblem(response, HttpStatusCode.Conflict);
+            (await _client.GetFromJsonAsync<ExpenseResponse>(created.Headers.Location, Token)).Should().Be(before);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public async Task UpdateReadsExpenseOnceAndChecksOriginalVersionIncludingNoOp(bool noOp)
+        {
+            var input = Input("USD");
+            using var created = await _client.PostAsJsonAsync(_route, input, Token);
+            created.EnsureSuccessStatusCode();
+            var original = (await created.Content.ReadFromJsonAsync<ExpenseResponse>(Token))!;
+            var version = await ReadVersionAsync(original.Id);
+            var observer = new UpdateCommandObserver();
+            await using var observed = ObserveUpdates(observer);
+            using var client = observed.CreateClient();
+            var replacement = noOp ? input : input with { Description = "Updated", Date = input.Date.AddDays(1) };
+
+            using var response = await PutExpenseAsync(client, created.Headers.Location, replacement, Token);
+
+            response.StatusCode.Should().Be(HttpStatusCode.NoContent);
+            TestContext.Out.WriteLine(string.Join("\n---\n", observer.Commands));
+            observer.AssertSingleReadAndVersion(version);
+            var updatedVersion = await ReadVersionAsync(original.Id);
+            updatedVersion.Should().NotEqual(version);
+            response.Headers.ETag!.Tag.Should().Be($"\"{Convert.ToBase64String(updatedVersion)}\"");
+            (await _client.GetFromJsonAsync<ExpenseResponse>(created.Headers.Location, Token)).Should()
+                .Be(original with { Description = replacement.Description, Date = replacement.Date });
+            _rates.Calls.Should().Be(1);
+        }
+
+        [TestCase(false, false, false)]
+        [TestCase(false, false, true)]
+        [TestCase(false, true, false)]
+        [TestCase(false, true, true)]
+        [TestCase(true, false, false)]
+        [TestCase(true, false, true)]
+        [TestCase(true, true, false)]
+        [TestCase(true, true, true)]
+        public async Task StalePutNeverOverwritesConcurrentUpdateOrDeletion(bool duringPersistence, bool delete, bool noOp)
+        {
+            var input = Input("EUR");
+            using var created = await _client.PostAsJsonAsync(_route, input, Token);
+            created.EnsureSuccessStatusCode();
+            var original = (await created.Content.ReadFromJsonAsync<ExpenseResponse>(Token))!;
+            var version = await ReadVersionAsync(original.Id);
+            var competitor = input with { Description = "Committed competitor", Amount = 25m };
+            var competed = false;
+            async Task Compete(CancellationToken token)
+            {
+                using var response = delete
+                    ? await DeleteExpenseAsync(_client, created.Headers.Location, token)
+                    : await PutExpenseAsync(_client, created.Headers.Location, competitor, token);
+                response.StatusCode.Should().Be(HttpStatusCode.NoContent);
+                competed = true;
+            }
+
+            var observer = new UpdateCommandObserver();
+            if (duringPersistence)
+            {
+                observer.BeforeUpdate = Compete;
+            }
+            else
+            {
+                observer.BeforeCategoryValidation = Compete;
+            }
+
+            await using var observed = ObserveUpdates(observer);
+            using var client = observed.CreateClient();
+            using var stale = await PutExpenseAsync(client, created.Headers.Location,
+                noOp ? input : input with { Description = "Stale writer" }, Token);
+
+            await AssertProblem(stale, HttpStatusCode.PreconditionFailed);
+            competed.Should().BeTrue();
+            observer.AssertSingleReadAndVersion(version);
+            if (delete)
+            {
+                using var missing = await _client.GetAsync(created.Headers.Location, Token);
+                await AssertProblem(missing, HttpStatusCode.NotFound);
+            }
+            else
+            {
+                (await _client.GetFromJsonAsync<ExpenseResponse>(created.Headers.Location, Token)).Should().Be(original with
+                {
+                    Description = competitor.Description,
+                    Amount = 25m,
+                    ConvertedAmount = 25m
+                });
+            }
+        }
+
+        [Test]
+        public async Task UpdateKeepsInitialVersionAcrossRateResolutionEvenWhenValuesAreRestored()
+        {
+            var input = Input("USD");
+            using var created = await _client.PostAsJsonAsync(_route, input, Token);
+            created.EnsureSuccessStatusCode();
+            var original = (await created.Content.ReadFromJsonAsync<ExpenseResponse>(Token))!;
+            var version = await ReadVersionAsync(original.Id);
+            var competed = false;
+            _rates.BeforeQuote = async token =>
+            {
+                using var changed = await PutExpenseAsync(_client, created.Headers.Location,
+                    input with { Description = "Temporary change" }, token);
+                changed.StatusCode.Should().Be(HttpStatusCode.NoContent);
+                using var restored = await PutExpenseAsync(_client, created.Headers.Location, input, token);
+                restored.StatusCode.Should().Be(HttpStatusCode.NoContent);
+                competed = true;
+            };
+            var observer = new UpdateCommandObserver();
+            await using var observed = ObserveUpdates(observer);
+            using var client = observed.CreateClient();
+
+            using var response = await PutExpenseAsync(client, created.Headers.Location, input with { Amount = 20m }, Token);
+
+            await AssertProblem(response, HttpStatusCode.PreconditionFailed);
+            competed.Should().BeTrue();
+            observer.AssertSingleReadAndVersion(version);
+            (await _client.GetFromJsonAsync<ExpenseResponse>(created.Headers.Location, Token)).Should().Be(original);
+            (await ReadVersionAsync(original.Id)).Should().NotEqual(version);
+            _rates.Calls.Should().Be(2);
+        }
+
+        [TestCase("amount", HttpStatusCode.BadRequest)]
+        [TestCase("category", HttpStatusCode.BadRequest)]
+        [TestCase("rates", HttpStatusCode.ServiceUnavailable)]
+        public async Task FailedUpdateDoesNotWriteOrAdvanceVersion(string failure, HttpStatusCode status)
+        {
+            var input = Input("USD");
+            using var created = await _client.PostAsJsonAsync(_route, input, Token);
+            created.EnsureSuccessStatusCode();
+            var original = (await created.Content.ReadFromJsonAsync<ExpenseResponse>(Token))!;
+            var version = await ReadVersionAsync(original.Id);
+            _rates.Available = false;
+            var observer = new UpdateCommandObserver();
+            await using var observed = ObserveUpdates(observer);
+            using var client = observed.CreateClient();
+            var replacement = failure switch
+            {
+                "amount" => input with { Amount = -1m },
+                "category" => input with { CategoryId = int.MaxValue },
+                _ => input with { Amount = 20m }
+            };
+
+            using var response = await PutExpenseAsync(client, created.Headers.Location, replacement, Token);
+
+            await AssertProblem(response, status);
+            observer.Commands.Should().NotContain(sql => sql.Contains("UPDATE [Expenses]", StringComparison.Ordinal));
+            (await ReadVersionAsync(original.Id)).Should().Equal(version);
+            (await _client.GetFromJsonAsync<ExpenseResponse>(created.Headers.Location, Token)).Should().Be(original);
+        }
+
+        [Test]
+        public async Task UpdateMissingAtInitialReadReturnsNotFoundWithoutWriting()
+        {
+            var observer = new UpdateCommandObserver();
+            await using var observed = ObserveUpdates(observer);
+            using var client = observed.CreateClient();
+            using var response = await SendConditionalAsync(client, HttpMethod.Put, new Uri($"{_route}/{int.MaxValue}", UriKind.Relative), Input("USD"), "\"AAAAAAAAAAA=\"", Token);
+            await AssertProblem(response, HttpStatusCode.NotFound);
+            observer.Commands.Should().ContainSingle().Which.Should().Contain("FROM [Expenses]");
+            _rates.Calls.Should().Be(0);
+        }
+
+        private WebApplicationFactory<Program> ObserveUpdates(UpdateCommandObserver observer)
+        {
+            return _factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+                services.ConfigureDbContext<SmartExpenseTrackerDbContext>(options => options.AddInterceptors(observer))));
+        }
+
+        private async Task<byte[]> ReadVersionAsync(int id)
+        {
+            await using var connection = new SqlConnection(_connection);
+            await connection.OpenAsync(Token);
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT Version FROM dbo.Expenses WHERE Id = @id";
+            command.Parameters.AddWithValue("@id", id);
+            return (byte[])(await command.ExecuteScalarAsync(Token))!;
+        }
+
+        private sealed class UpdateCommandObserver : DbCommandInterceptor
+        {
+            internal List<string> Commands { get; } = [];
+            internal byte[]? UpdateVersion { get; private set; }
+            internal byte[]? DeleteVersion { get; private set; }
+            internal Func<CancellationToken, Task>? BeforeCategoryValidation { get; set; }
+            internal Func<CancellationToken, Task>? BeforeUpdate { get; set; }
+            internal Func<CancellationToken, Task>? BeforeDelete { get; set; }
+
+            public override async ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(DbCommand command,
+                CommandEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+            {
+                Commands.Add(command.CommandText);
+                if (command.CommandText.Contains("DELETE", StringComparison.Ordinal) &&
+                    command.CommandText.Contains("[Expenses]", StringComparison.Ordinal))
+                {
+                    var parameter = command.Parameters.Cast<DbParameter>().Single(p => p.Value is byte[]);
+                    DeleteVersion = ((byte[])parameter.Value!).ToArray();
+                    command.CommandText.Should().Contain($"[Version] = {parameter.ParameterName}");
+                    if (BeforeDelete is { } delete)
+                    {
+                        BeforeDelete = null;
+                        await delete(cancellationToken);
+                    }
+                }
+
+                return result;
+            }
+
+            public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(DbCommand command,
+                CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default)
+            {
+                Commands.Add(command.CommandText);
+                if (command.CommandText.Contains("FROM [Categories]", StringComparison.Ordinal) && BeforeCategoryValidation is { } validate)
+                {
+                    BeforeCategoryValidation = null;
+                    await validate(cancellationToken);
+                }
+
+                if (command.CommandText.Contains("UPDATE [Expenses]", StringComparison.Ordinal))
+                {
+                    var parameter = command.Parameters.Cast<DbParameter>().Single(p => p.Value is byte[]);
+                    UpdateVersion = ((byte[])parameter.Value!).ToArray();
+                    command.CommandText.Should().Contain($"[Version] = {parameter.ParameterName}");
+                    if (BeforeUpdate is { } update)
+                    {
+                        BeforeUpdate = null;
+                        await update(cancellationToken);
+                    }
+                }
+
+                return result;
+            }
+
+            internal void AssertSingleReadAndVersion(byte[] expected)
+            {
+                Commands.Count(sql => sql.Contains("FROM [Expenses]", StringComparison.Ordinal)).Should().Be(1);
+                Commands.Count(sql => sql.Contains("UPDATE [Expenses]", StringComparison.Ordinal)).Should().Be(1);
+                UpdateVersion.Should().Equal(expected);
+            }
+        }
 
         [Test]
         public async Task SqlLikeCategoryAndDescriptionRoundTripAsLiteralText()
@@ -267,10 +696,10 @@ namespace SmartExpenseTracker.Api.IntegrationTests
             (await _client.GetFromJsonAsync<ExpenseResponse[]>(_route, Token))!.Should().Equal(item);
             using var blocked = await _client.DeleteAsync($"/api/categories/{_category}", Token);
             await AssertProblem(blocked, HttpStatusCode.Conflict);
-            using var updated = await _client.PutAsJsonAsync(location, input with { Description = "  Train  " }, Token);
+            using var updated = await PutExpenseAsync(_client, location, input with { Description = "  Train  " }, Token);
             updated.StatusCode.Should().Be(HttpStatusCode.NoContent);
             (await _client.GetFromJsonAsync<ExpenseResponse>(location, Token))!.Description.Should().Be("Train");
-            using var deleted = await _client.DeleteAsync(location, Token);
+            using var deleted = await DeleteExpenseAsync(_client, location, Token);
             deleted.StatusCode.Should().Be(HttpStatusCode.NoContent);
             using var missing = await _client.GetAsync(location, Token);
             await AssertProblem(missing, HttpStatusCode.NotFound);
@@ -308,17 +737,17 @@ namespace SmartExpenseTracker.Api.IntegrationTests
 
             _rates.Available = false;
             var metadata = input with { Description = "Ticket", Date = input.Date.AddYears(-10) };
-            using var updated = await _client.PutAsJsonAsync(location, metadata, Token);
+            using var updated = await PutExpenseAsync(_client, location, metadata, Token);
             updated.StatusCode.Should().Be(HttpStatusCode.NoContent);
             _rates.Calls.Should().Be(1);
             var expected = first with { Description = metadata.Description, Date = metadata.Date };
             (await _client.GetFromJsonAsync<ExpenseResponse>(location, Token)).Should().Be(expected);
-            using var failed = await _client.PutAsJsonAsync(location, input with { Amount = 20m }, Token);
+            using var failed = await PutExpenseAsync(_client, location, input with { Amount = 20m }, Token);
             await AssertProblem(failed, HttpStatusCode.ServiceUnavailable);
             (await _client.GetFromJsonAsync<ExpenseResponse>(location, Token)).Should().Be(expected);
 
             _rates.Available = true;
-            using var repriced = await _client.PutAsJsonAsync(location, input with { Currency = "GBP" }, Token);
+            using var repriced = await PutExpenseAsync(_client, location, input with { Currency = "GBP" }, Token);
             repriced.StatusCode.Should().Be(HttpStatusCode.NoContent);
             var latest = (await _client.GetFromJsonAsync<ExpenseResponse>(location, Token))!;
             latest.AppliedRate.Should().Be(1.25m);
@@ -387,7 +816,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         {
             using var created = await _client.PostAsJsonAsync(_route, Input("EUR"), Token);
             created.EnsureSuccessStatusCode();
-            using var removed = await _client.DeleteAsync(created.Headers.Location, Token);
+            using var removed = await DeleteExpenseAsync(_client, created.Headers.Location, Token);
             removed.EnsureSuccessStatusCode();
             await using var changed = WithBaseCurrency("GBP");
             using var client = changed.CreateClient();

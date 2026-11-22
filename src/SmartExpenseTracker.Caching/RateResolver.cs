@@ -1,4 +1,5 @@
 using System.Data.Common;
+using System.Net;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -152,7 +153,10 @@ namespace SmartExpenseTracker.Caching
             {
                 lock (_gate)
                 {
-                    _retryAt = _clock.GetUtcNow() + _options.RetryInterval;
+                    var interval = ex is HttpRequestException { StatusCode: HttpStatusCode.TooManyRequests }
+                        ? _options.RateLimitRetryInterval
+                        : _options.RetryInterval;
+                    _retryAt = _clock.GetUtcNow() + interval;
                 }
 
                 return Fallback(previous, ex);

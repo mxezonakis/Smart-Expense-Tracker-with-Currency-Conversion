@@ -39,6 +39,16 @@ namespace SmartExpenseTracker.Api
                     Status = StatusCodes.Status400BadRequest
                 },
                 ExpenseConflictException conflict => new ProblemDetails { Status = 409, Title = conflict.Message },
+                ExpensePreconditionRequiredException => new ProblemDetails
+                {
+                    Status = 428,
+                    Title = "An If-Match header is required for this operation."
+                },
+                ExpensePreconditionFailedException => new ProblemDetails
+                {
+                    Status = 412,
+                    Title = "The expense no longer matches the supplied precondition."
+                },
                 RateUnavailableException => new ProblemDetails { Status = 503, Title = "No eligible exchange rate is available." },
                 _ => null
             };

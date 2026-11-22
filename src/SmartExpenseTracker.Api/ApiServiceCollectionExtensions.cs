@@ -65,7 +65,7 @@ namespace SmartExpenseTracker.Api
                 }
 
                 return Task.CompletedTask;
-            }).AddOperationTransformer((operation, _, _) =>
+            }).AddOperationTransformer((operation, context, _) =>
             {
                 foreach (var parameter in (operation.Parameters ?? []).OfType<OpenApiParameter>())
                 {
@@ -90,6 +90,45 @@ namespace SmartExpenseTracker.Api
                     {
                         parameter.Example = example;
                     }
+                }
+
+                var path = context.Description.RelativePath;
+                var method = context.Description.HttpMethod;
+                if (path == "api/expenses/{id}" && method is "PUT" or "DELETE")
+                {
+                    (operation.Parameters ??= []).Add(new OpenApiParameter
+                    {
+                        Name = "If-Match",
+                        In = ParameterLocation.Header,
+                        Required = true,
+                        Description = "Exactly one strong ETag from the individual expense GET or POST. Include the quotes. " +
+                            "Missing: 428; malformed, weak, wildcard or multiple tags: 400; stale: 412.",
+                        Schema = new OpenApiSchema { Type = JsonSchemaType.String },
+                        Example = JsonValue.Create("\"AAAAAAAAB9E=\"")
+                    });
+                }
+
+                var etagStatus = (path, method) switch
+                {
+                    ("api/expenses", "POST") => "201",
+                    ("api/expenses/{id}", "GET") => "200",
+                    ("api/expenses/{id}", "PUT") => "204",
+                    _ => null
+                };
+                if (etagStatus is not null && operation.Responses?[etagStatus] is OpenApiResponse response)
+                {
+                    (response.Headers ??= new Dictionary<string, IOpenApiHeader>())["ETag"] = new OpenApiHeader
+                    {
+                        Description = "Strong opaque version of this expense. Send the complete quoted value as If-Match on the next PUT or DELETE.",
+                        Schema = new OpenApiSchema { Type = JsonSchemaType.String, Examples = [JsonValue.Create("\"AAAAAAAAB9E=\"")!] }
+                    };
+                }
+
+                if (path == "api/expenses/{id}" && method == "PUT" &&
+                    operation.Responses?["200"] is OpenApiResponse unchanged &&
+                    operation.Responses?["204"] is OpenApiResponse updated)
+                {
+                    unchanged.Headers = updated.Headers;
                 }
 
                 return Task.CompletedTask;

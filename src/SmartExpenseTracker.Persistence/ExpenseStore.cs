@@ -25,7 +25,7 @@ namespace SmartExpenseTracker.Persistence
             return _context.Set<DatasetRow>().AnyAsync(row => row.BaseCurrency != baseCurrency, cancellationToken);
         }
 
-        public async Task<Expense> CreateAsync(Expense expense, CancellationToken cancellationToken)
+        public async Task<ExpenseSnapshot> CreateAsync(Expense expense, CancellationToken cancellationToken)
         {
             var currency = expense.Conversion.BaseCurrency;
             var dataset = _context.Set<DatasetRow>();
@@ -49,18 +49,19 @@ namespace SmartExpenseTracker.Persistence
             return created;
         }
 
-        private async Task<Expense> InsertAsync(Expense expense, CancellationToken cancellationToken)
+        private async Task<ExpenseSnapshot> InsertAsync(Expense expense, CancellationToken cancellationToken)
         {
             var row = new ExpenseRow { Currency = expense.Currency, BaseCurrency = expense.Conversion.BaseCurrency };
             Apply(row, expense);
             Expenses.Add(row);
             await SaveAsync(cancellationToken);
-            return expense with { Id = row.Id };
+            return new ExpenseSnapshot(expense with { Id = row.Id }, row.Version);
         }
 
-        public Task<Expense?> FindAsync(int id, CancellationToken cancellationToken)
+        public async Task<ExpenseSnapshot?> FindAsync(int id, CancellationToken cancellationToken)
         {
-            return Expenses.Where(r => r.Id == id).Select(_projection).SingleOrDefaultAsync(cancellationToken);
+            var row = await Expenses.AsNoTracking().SingleOrDefaultAsync(r => r.Id == id, cancellationToken);
+            return row is null ? null : new ExpenseSnapshot(_toExpense(row), row.Version);
         }
 
         public async Task<IReadOnlyList<Expense>> ListAsync(ExpenseQuery query, CancellationToken cancellationToken)
@@ -107,22 +108,22 @@ namespace SmartExpenseTracker.Persistence
             return sorted.ThenBy(row => row.Id).Select(_projection);
         }
 
-        public async Task<bool> UpdateAsync(Expense previous, Expense replacement, CancellationToken cancellationToken)
+        public async Task<byte[]> UpdateAsync(ExpenseSnapshot previous, Expense replacement, CancellationToken cancellationToken)
         {
-            var row = await Expenses.SingleOrDefaultAsync(r => r.Id == previous.Id, cancellationToken);
-            if (row is null)
+            var original = previous.Expense;
+            var row = new ExpenseRow
             {
-                return false;
-            }
-
-            if (_toExpense(row) != previous)
-            {
-                throw new ExpenseConflictException("The expense changed during this request.");
-            }
-
+                Id = original.Id,
+                Currency = original.Currency,
+                BaseCurrency = original.Conversion.BaseCurrency,
+                Version = previous.Version.ToArray()
+            };
+            Apply(row, original);
+            var entry = Expenses.Attach(row);
+            entry.Property(r => r.Version).OriginalValue = previous.Version.ToArray();
             Apply(row, replacement);
             await SaveAsync(cancellationToken);
-            return true;
+            return row.Version;
         }
 
         private static readonly Func<ExpenseRow, Expense> _toExpense = _projection.Compile();
@@ -149,7 +150,7 @@ namespace SmartExpenseTracker.Persistence
             }
             catch (DbUpdateConcurrencyException exception)
             {
-                throw new ExpenseConflictException("The expense changed during this request.", exception);
+                throw new ExpensePreconditionFailedException(exception);
             }
             catch (DbUpdateException exception) when (exception.InnerException is SqlException sql &&
                 (IsCategoryReferenceFailure(sql, "INSERT") || IsCategoryReferenceFailure(sql, "UPDATE")))
@@ -166,9 +167,10 @@ namespace SmartExpenseTracker.Persistence
                 error.Number == 547 && error.Message.StartsWith(prefix, StringComparison.Ordinal));
         }
 
-        public async Task<bool> DeleteAsync(int id, CancellationToken cancellationToken)
+        public async Task<bool> DeleteAsync(int id, byte[] expectedVersion, CancellationToken cancellationToken)
         {
-            return await Expenses.Where(row => row.Id == id).ExecuteDeleteAsync(cancellationToken) != 0;
+            return await Expenses.Where(row => row.Id == id && row.Version == expectedVersion)
+                .ExecuteDeleteAsync(cancellationToken) != 0;
         }
     }
 }

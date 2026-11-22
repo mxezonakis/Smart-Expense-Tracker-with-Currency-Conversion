@@ -18,30 +18,41 @@ namespace SmartExpenseTracker.Application.Expenses
             _baseCurrency = baseCurrency;
         }
 
-        public async Task<Expense> CreateAsync(ExpenseInput input, CancellationToken cancellationToken)
+        public async Task<ExpenseSnapshot> CreateAsync(ExpenseInput input, CancellationToken cancellationToken)
         {
             var expense = await PrepareAsync(input, null, cancellationToken);
             return await _expenses.CreateAsync(expense, cancellationToken);
         }
 
-        public async Task<bool> UpdateAsync(int id, ExpenseInput input, CancellationToken cancellationToken)
+        public async Task<ExpenseUpdateResult?> UpdateAsync(int id, ExpenseInput input, byte[] expectedVersion, CancellationToken cancellationToken)
         {
             var previous = await _expenses.FindAsync(id, cancellationToken);
             if (previous is null)
             {
-                return false;
+                return null;
             }
 
-            if (previous.Conversion.BaseCurrency != _baseCurrency.Code)
+            if (!previous.Version.AsSpan().SequenceEqual(expectedVersion))
+            {
+                throw new ExpensePreconditionFailedException();
+            }
+
+            if (previous.Expense.Conversion.BaseCurrency != _baseCurrency.Code)
             {
                 throw new ExpenseConflictException("The configured base currency differs from the dataset currency.");
             }
 
-            var replacement = await PrepareAsync(input, previous, cancellationToken);
-            return await _expenses.UpdateAsync(previous, replacement, cancellationToken);
+            var replacement = await PrepareAsync(input, previous.Expense, cancellationToken);
+            if (replacement == previous.Expense)
+            {
+                return new ExpenseUpdateResult(false, previous.Version);
+            }
+
+            var version = await _expenses.UpdateAsync(previous, replacement, cancellationToken);
+            return new ExpenseUpdateResult(true, version);
         }
 
-        public Task<Expense?> FindAsync(int id, CancellationToken cancellationToken)
+        public Task<ExpenseSnapshot?> FindAsync(int id, CancellationToken cancellationToken)
         {
             return _expenses.FindAsync(id, cancellationToken);
         }
@@ -51,9 +62,12 @@ namespace SmartExpenseTracker.Application.Expenses
             return _expenses.ListAsync(query, cancellationToken);
         }
 
-        public Task<bool> DeleteAsync(int id, CancellationToken cancellationToken)
+        public async Task DeleteAsync(int id, byte[] expectedVersion, CancellationToken cancellationToken)
         {
-            return _expenses.DeleteAsync(id, cancellationToken);
+            if (!await _expenses.DeleteAsync(id, expectedVersion, cancellationToken))
+            {
+                throw new ExpensePreconditionFailedException();
+            }
         }
 
         private async Task<Expense> PrepareAsync(ExpenseInput input, Expense? previous, CancellationToken cancellationToken)

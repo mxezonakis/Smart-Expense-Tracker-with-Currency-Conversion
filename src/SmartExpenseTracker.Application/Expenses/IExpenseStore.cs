@@ -10,14 +10,19 @@ namespace SmartExpenseTracker.Application.Expenses
 
     public sealed record DatasetCurrency(string Code);
 
+    // Internal workflow state, never part of the HTTP request or response contract.
+    public sealed record ExpenseSnapshot(Expense Expense, byte[] Version);
+
+    public sealed record ExpenseUpdateResult(bool Updated, byte[] Version);
+
     public interface IExpenseStore
     {
         Task<bool> HasConflictingDatasetCurrencyAsync(string baseCurrency, CancellationToken cancellationToken);
-        Task<Expense> CreateAsync(Expense expense, CancellationToken cancellationToken);
-        Task<Expense?> FindAsync(int id, CancellationToken cancellationToken);
+        Task<ExpenseSnapshot> CreateAsync(Expense expense, CancellationToken cancellationToken);
+        Task<ExpenseSnapshot?> FindAsync(int id, CancellationToken cancellationToken);
         Task<IReadOnlyList<Expense>> ListAsync(ExpenseQuery query, CancellationToken cancellationToken);
-        Task<bool> UpdateAsync(Expense previous, Expense replacement, CancellationToken cancellationToken);
-        Task<bool> DeleteAsync(int id, CancellationToken cancellationToken);
+        Task<byte[]> UpdateAsync(ExpenseSnapshot previous, Expense replacement, CancellationToken cancellationToken);
+        Task<bool> DeleteAsync(int id, byte[] expectedVersion, CancellationToken cancellationToken);
     }
 
     public sealed class ExpenseValidationException : Exception
@@ -35,6 +40,14 @@ namespace SmartExpenseTracker.Application.Expenses
     {
         public ExpenseConflictException(string message, Exception? cause = null)
             : base(message, cause)
+        {
+        }
+    }
+
+    public sealed class ExpensePreconditionFailedException : Exception
+    {
+        public ExpensePreconditionFailedException(Exception? cause = null)
+            : base("The expense no longer matches the supplied precondition.", cause)
         {
         }
     }

@@ -1,15 +1,35 @@
 <Solution>
-  <Folder Name="/src/">
-    <Project Path="src/SmartExpenseTracker.Api/SmartExpenseTracker.Api.csproj" />
-    <Project Path="src/SmartExpenseTracker.Application/SmartExpenseTracker.Application.csproj" />
-    <Project Path="src/SmartExpenseTracker.Persistence/SmartExpenseTracker.Persistence.csproj" />
-    <Project Path="src/SmartExpenseTracker.Integrations/SmartExpenseTracker.Integrations.csproj" />
-    <Project Path="src/SmartExpenseTracker.Caching/SmartExpenseTracker.Caching.csproj" />
+  <Folder Name="/Solution Files/">
+    <File Path=".editorconfig" />
+    <File Path=".gitattributes" />
+    <File Path=".gitignore" />
+    <File Path="AGENTS.md" />
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="global.json" />
+    <File Path="implementation-plan.md" />
+    <File Path="README.md" />
   </Folder>
-  <Folder Name="/tests/">
+  <Folder Name="/Solution Files/docs/">
+    <File Path="docs/DOTNET_BACKEND_INSTRUCTIONS.md" />
+  </Folder>
+  <Folder Name="/src/API/">
+    <Project Path="src/SmartExpenseTracker.Api/SmartExpenseTracker.Api.csproj" />
+  </Folder>
+  <Folder Name="/src/Application/">
+    <Project Path="src/SmartExpenseTracker.Application/SmartExpenseTracker.Application.csproj" />
+  </Folder>
+  <Folder Name="/src/Infrastructure/">
+    <Project Path="src/SmartExpenseTracker.Caching/SmartExpenseTracker.Caching.csproj" />
+    <Project Path="src/SmartExpenseTracker.Integrations/SmartExpenseTracker.Integrations.csproj" />
+    <Project Path="src/SmartExpenseTracker.Persistence/SmartExpenseTracker.Persistence.csproj" />
+  </Folder>
+  <Folder Name="/tests/Unit Tests/">
     <Project Path="tests/SmartExpenseTracker.Application.UnitTests/SmartExpenseTracker.Application.UnitTests.csproj" />
     <Project Path="tests/SmartExpenseTracker.Integrations.UnitTests/SmartExpenseTracker.Integrations.UnitTests.csproj" />
     <Project Path="tests/SmartExpenseTracker.Caching.UnitTests/SmartExpenseTracker.Caching.UnitTests.csproj" />
+  </Folder>
+  <Folder Name="/tests/Integration Tests/">
     <Project Path="tests/SmartExpenseTracker.Api.IntegrationTests/SmartExpenseTracker.Api.IntegrationTests.csproj" />
   </Folder>
 </Solution>

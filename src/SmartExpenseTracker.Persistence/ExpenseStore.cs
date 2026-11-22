@@ -122,8 +122,6 @@ namespace SmartExpenseTracker.Persistence
             var entry = Expenses.Attach(row);
             entry.Property(r => r.Version).OriginalValue = previous.Version.ToArray();
             Apply(row, replacement);
-            // Even an identical PUT must check the version captured before validation/rate resolution.
-            entry.Property(r => r.Amount).IsModified = true;
             await SaveAsync(cancellationToken);
             return row.Version;
         }

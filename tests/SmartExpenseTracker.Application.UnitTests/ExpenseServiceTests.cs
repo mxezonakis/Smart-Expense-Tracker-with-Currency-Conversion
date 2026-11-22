@@ -151,6 +151,21 @@ namespace SmartExpenseTracker.Application.UnitTests
         }
 
         [Test]
+        public async Task NormalizedUnchangedReplacementNeverCallsPersistenceUpdate()
+        {
+            Quote(0.8234567890125m);
+            var original = (await _service.CreateAsync(_input, Token)).Expense with { Id = 7 };
+            var snapshot = new ExpenseSnapshot(original, [0, 0, 0, 0, 0, 0, 0, 7]);
+            A.CallTo(() => _store.FindAsync(7, Token)).Returns(snapshot);
+            var result = await _service.UpdateAsync(7, _input with { Amount = 10.000m, Currency = "USD", Description = "Food" }, snapshot.Version, Token);
+            result!.Updated.Should().BeFalse();
+            result.Version.Should().Equal(snapshot.Version);
+            A.CallTo(() => _store.UpdateAsync(A<ExpenseSnapshot>._, A<Expense>._, Token)).MustNotHaveHappened();
+            A.CallTo(() => _categories.FindAsync(1, Token)).MustHaveHappenedTwiceExactly();
+            A.CallTo(() => _resolver.ResolveAsync(Token)).MustHaveHappenedOnceExactly();
+        }
+
+        [Test]
         public async Task MetadataEditsKeepSnapshotAndMonetaryEditsResolveAgain()
         {
             Quote(0.8234567890125m);

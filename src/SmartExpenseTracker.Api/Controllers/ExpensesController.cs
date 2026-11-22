@@ -81,11 +81,12 @@ namespace SmartExpenseTracker.Api.Controllers
         }
 
         /// <summary>Update an expense.</summary>
-        /// <remarks>Requires exactly one specific strong If-Match ETag obtained from GET or POST. Recalculates the conversion only when the original amount or normalized currency changes. Category, date and description edits preserve the stored rate, converted amount and provider metadata. Identical-value writes still check concurrency and return a new ETag. Weak tags, wildcard and multiple tags are unsupported.</remarks>
+        /// <remarks>Requires exactly one specific strong If-Match ETag obtained from GET or POST. Recalculates the conversion only when the original amount or normalized currency changes. Category, date and description edits preserve the stored rate, converted amount and provider metadata. Unchanged normalized values return 200 without a write and with the initially read ETag. This path does not detect every concurrent change after the initial version check. Weak tags, wildcard and multiple tags are unsupported.</remarks>
         /// <param name="id">The expense identifier.</param>
         /// <param name="cancellationToken">Cancels the request and supported database or provider operations.</param>
         /// <param name="request">The replacement expense fields.</param>
         /// <returns>The HTTP result described below.</returns>
+        /// <response code="200">No persisted values changed; updated is false, reason is unchanged and ETag is the initially read version.</response>
         /// <response code="204">The expense was updated; ETag contains the new version.</response>
         /// <response code="400">The input or If-Match is invalid or unsupported, the category is missing, or the currency is unsupported by an eligible rate table.</response>
         /// <response code="404">The expense does not exist.</response>
@@ -94,6 +95,7 @@ namespace SmartExpenseTracker.Api.Controllers
         /// <response code="428">The required If-Match header is missing.</response>
         /// <response code="503">A required replacement exchange rate is unavailable.</response>
         [HttpPut("{id:int}")]
+        [ProducesResponseType<ExpenseUnchangedResponse>(200)]
         [ProducesResponseType(204)]
         [ProducesResponseType<ValidationProblemDetails>(400)]
         [ProducesResponseType<ProblemDetails>(404)]
@@ -104,14 +106,14 @@ namespace SmartExpenseTracker.Api.Controllers
         public async Task<IActionResult> Update(int id, ExpenseRequest request, CancellationToken cancellationToken)
         {
             var expectedVersion = ExpenseEtags.RequireIfMatch(Request.Headers);
-            var version = await _expenses.UpdateAsync(id, request.ToInput(), expectedVersion, cancellationToken);
-            if (version is null)
+            var result = await _expenses.UpdateAsync(id, request.ToInput(), expectedVersion, cancellationToken);
+            if (result is null)
             {
                 return NotFound();
             }
 
-            Response.Headers.ETag = ExpenseEtags.Format(version);
-            return NoContent();
+            Response.Headers.ETag = ExpenseEtags.Format(result.Version);
+            return result.Updated ? NoContent() : Ok(new ExpenseUnchangedResponse(false, "unchanged"));
         }
 
         /// <summary>Delete an expense.</summary>

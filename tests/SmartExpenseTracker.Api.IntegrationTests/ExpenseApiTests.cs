@@ -272,7 +272,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
 
         [TestCase(false)]
         [TestCase(true)]
-        public async Task UpdateReadsExpenseOnceAndChecksOriginalVersionIncludingNoOp(bool noOp)
+        public async Task UpdateReadsExpenseOnceAndWritesOnlyEffectiveChanges(bool noOp)
         {
             var input = Input("USD");
             using var created = await _client.PostAsJsonAsync(_route, input, Token);
@@ -286,12 +286,23 @@ namespace SmartExpenseTracker.Api.IntegrationTests
 
             using var response = await PutExpenseAsync(client, created.Headers.Location, replacement, Token);
 
-            response.StatusCode.Should().Be(HttpStatusCode.NoContent);
+            response.StatusCode.Should().Be(noOp ? HttpStatusCode.OK : HttpStatusCode.NoContent);
             TestContext.Out.WriteLine(string.Join("\n---\n", observer.Commands));
-            observer.AssertSingleReadAndVersion(version);
             var updatedVersion = await ReadVersionAsync(original.Id);
-            updatedVersion.Should().NotEqual(version);
-            response.Headers.ETag!.Tag.Should().Be($"\"{Convert.ToBase64String(updatedVersion)}\"");
+            if (noOp)
+            {
+                await AssertUnchanged(response, version);
+                observer.AssertReadOnly();
+                updatedVersion.Should().Equal(version);
+            }
+            else
+            {
+                observer.AssertSingleReadAndVersion(version);
+                updatedVersion.Should().NotEqual(version);
+                response.Headers.ETag!.Tag.Should().Be($"\"{Convert.ToBase64String(updatedVersion)}\"");
+                observer.Commands.Single(sql => sql.Contains("UPDATE [Expenses]", StringComparison.Ordinal))
+                    .Should().NotContain("SET [Amount]");
+            }
             (await _client.GetFromJsonAsync<ExpenseResponse>(created.Headers.Location, Token)).Should()
                 .Be(original with { Description = replacement.Description, Date = replacement.Date });
             _rates.Calls.Should().Be(1);
@@ -305,7 +316,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         [TestCase(true, false, true)]
         [TestCase(true, true, false)]
         [TestCase(true, true, true)]
-        public async Task StalePutNeverOverwritesConcurrentUpdateOrDeletion(bool duringPersistence, bool delete, bool noOp)
+        public async Task PutNeverOverwritesConcurrentChangesAndNoOpDoesNotRecheck(bool duringPersistence, bool delete, bool noOp)
         {
             var input = Input("EUR");
             using var created = await _client.PostAsJsonAsync(_route, input, Token);
@@ -338,9 +349,24 @@ namespace SmartExpenseTracker.Api.IntegrationTests
             using var stale = await PutExpenseAsync(client, created.Headers.Location,
                 noOp ? input : input with { Description = "Stale writer" }, Token);
 
-            await AssertProblem(stale, HttpStatusCode.PreconditionFailed);
-            competed.Should().BeTrue();
-            observer.AssertSingleReadAndVersion(version);
+            if (noOp)
+            {
+                await AssertUnchanged(stale, version);
+                observer.AssertReadOnly();
+                competed.Should().Be(!duringPersistence, "a no-op never reaches the SQL UPDATE interception point");
+                if (duringPersistence)
+                {
+                    (await ReadVersionAsync(original.Id)).Should().Equal(version);
+                    (await _client.GetFromJsonAsync<ExpenseResponse>(created.Headers.Location, Token)).Should().Be(original);
+                    return;
+                }
+            }
+            else
+            {
+                await AssertProblem(stale, HttpStatusCode.PreconditionFailed);
+                competed.Should().BeTrue();
+                observer.AssertSingleReadAndVersion(version);
+            }
             if (delete)
             {
                 using var missing = await _client.GetAsync(created.Headers.Location, Token);
@@ -446,6 +472,38 @@ namespace SmartExpenseTracker.Api.IntegrationTests
             return (byte[])(await command.ExecuteScalarAsync(Token))!;
         }
 
+        private static async Task AssertUnchanged(HttpResponseMessage response, byte[] version)
+        {
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+            using var body = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync(Token));
+            body.RootElement.EnumerateObject().Select(property => property.Name).Should().BeEquivalentTo("updated", "reason");
+            body.RootElement.GetProperty("updated").GetBoolean().Should().BeFalse();
+            body.RootElement.GetProperty("reason").GetString().Should().Be("unchanged");
+            response.Headers.ETag!.Tag.Should().Be($"\"{Convert.ToBase64String(version)}\"");
+        }
+
+        [Test]
+        public async Task NormalizedEquivalentPutDoesNotWriteOrAdvanceVersion()
+        {
+            var input = Input("USD");
+            using var created = await _client.PostAsJsonAsync(_route, input, Token);
+            created.EnsureSuccessStatusCode();
+            var original = (await created.Content.ReadFromJsonAsync<ExpenseResponse>(Token))!;
+            var version = await ReadVersionAsync(original.Id);
+            var observer = new UpdateCommandObserver();
+            await using var observed = ObserveUpdates(observer);
+            using var client = observed.CreateClient();
+            _rates.Available = false;
+            using var response = await PutExpenseAsync(client, created.Headers.Location,
+                input with { Amount = 10.000m, Currency = " uSd ", Description = "   " }, Token);
+            await AssertUnchanged(response, version);
+            observer.AssertReadOnly();
+            (await ReadVersionAsync(original.Id)).Should().Equal(version);
+            (await _client.GetFromJsonAsync<ExpenseResponse>(created.Headers.Location, Token)).Should().Be(original);
+            _rates.Calls.Should().Be(1);
+            TestContext.Out.WriteLine(string.Join("\n---\n", observer.Commands));
+        }
+
         private sealed class UpdateCommandObserver : DbCommandInterceptor
         {
             internal List<string> Commands { get; } = [];
@@ -498,6 +556,15 @@ namespace SmartExpenseTracker.Api.IntegrationTests
                 }
 
                 return result;
+            }
+
+            internal void AssertReadOnly()
+            {
+                Commands.Should().HaveCount(2);
+                Commands.Count(sql => sql.Contains("FROM [Expenses]", StringComparison.Ordinal)).Should().Be(1);
+                Commands.Count(sql => sql.Contains("FROM [Categories]", StringComparison.Ordinal)).Should().Be(1);
+                Commands.Should().OnlyContain(sql => sql.TrimStart().StartsWith("SELECT", StringComparison.Ordinal));
+                UpdateVersion.Should().BeNull();
             }
 
             internal void AssertSingleReadAndVersion(byte[] expected)

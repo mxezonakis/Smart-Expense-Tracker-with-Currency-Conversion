@@ -57,7 +57,7 @@ Open [Swagger UI](http://localhost:54131/swagger) for interactive documentation 
 | /api/categories | GET, POST | 200 array; 201 object with Location |
 | /api/categories/{id} | GET, PUT, DELETE | 200 object; 204; 204 |
 | /api/expenses | GET, POST | 200 array; 201 object with Location |
-| /api/expenses/{id} | GET, PUT, DELETE | 200 object; 204; 204 |
+| /api/expenses/{id} | GET, PUT, DELETE | 200 object; 204 changed or 200 unchanged; 204 |
 | /api/reports/by-category | GET | 200 category totals |
 | /api/reports/by-period?period=day | GET | 200 period totals; also week/month |
 | /api/statistics | GET | 200 statistics snapshot |
@@ -94,7 +94,7 @@ A base-currency request can use the same body with currency EUR. Its response sh
 {"id":1,"amount":10,"currency":"EUR","categoryId":1,"date":"2026-11-20","description":"Train ticket","baseCurrency":"EUR","appliedRate":1,"convertedAmount":10,"provider":null,"publishedAt":null,"isFallback":false}
 ```
 
-A USD response has the same fields with its applied rate, converted amount, provider publication timestamp and fallback flag. IDs and live rate values vary. The 201 response includes Location, the saved expense and its strong ETag. Individual GET responses also include ETag; the JSON body is unchanged. GET /api/expenses returns a JSON array of expenses. GET, PUT and DELETE /api/expenses/{id} read, replace and delete one expense. PUT takes the same body as POST. Successful PUT and DELETE return 204.
+A USD response has the same fields with its applied rate, converted amount, provider publication timestamp and fallback flag. IDs and live rate values vary. The 201 response includes Location, the saved expense and its strong ETag. Individual GET responses also include ETag; the JSON body is unchanged. GET /api/expenses returns a JSON array of expenses. GET, PUT and DELETE /api/expenses/{id} read, replace and delete one expense. PUT takes the same body as POST. Changed-value PUT and successful DELETE return 204. An unchanged PUT returns 200 with `{"updated":false,"reason":"unchanged"}` and its unchanged ETag.
 
 Example: `GET /api/expenses?from=2026-01-01&to=2026-01-31&categoryId=2&currency=usd&sortBy=amount&direction=asc`.
 
@@ -129,7 +129,7 @@ Content-Type: application/json
 {"amount":10.00,"currency":"USD","categoryId":1,"date":"2026-11-20","description":"Updated ticket"}
 ```
 
-Successful PUT returns 204 and a new ETag. For deletion, GET the current expense again and use its returned ETag (or use the new ETag from the successful PUT):
+A PUT that changes persisted values returns 204 and a new ETag. A normalized, validated replacement equal to the original returns 200 with `{"updated":false,"reason":"unchanged"}` and the initially read ETag; it performs no UPDATE and does not advance rowversion. For deletion, GET the current expense again and use its returned ETag (or use the new ETag from the successful PUT):
 
 ```http
 DELETE /api/expenses/1
@@ -138,7 +138,7 @@ If-Match: "AAAAAAAAB9I="
 
 Successful DELETE returns 204. A delete with a nonmatching version, including an already absent expense, returns 412. It uses one atomic SQL DELETE with both ID and expected version, without a preceding read.
 
-PUT reads the expense and SQL Server rowversion once, compares it with the client's tag before validation/rate resolution, and preserves that version until the guarded UPDATE. Concurrent modification or deletion during PUT also returns 412. Identical-value PUTs still perform a guarded write and return a new ETag. This protects both GET-to-PUT edits and changes during PUT; it does not merge competing edits. On 412, retrieve current data and reconcile before retrying. Existing clients must supply these headers; unconditional expense writes are no longer supported. Category operations are unchanged.
+PUT reads the expense and SQL Server rowversion once, compares it with the client's tag before validation/rate resolution, and preserves that version until the guarded UPDATE. Concurrent modification or deletion before a changed-value PUT is persisted also returns 412. An unchanged PUT checks the client version at its initial read but does not recheck afterward: it can return 200 even if another request changes or deletes the expense after that check. It never overwrites that change and adds no locks, transaction or write to detect it. Changed-value writes protect both GET-to-PUT edits and changes during PUT; competing edits are not merged. On 412, retrieve current data and reconcile before retrying. Existing clients must supply these headers; unconditional expense writes are no longer supported. Category operations are unchanged.
 
 
 ## Solution layout

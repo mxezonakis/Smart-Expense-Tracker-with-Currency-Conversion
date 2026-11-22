@@ -28,8 +28,17 @@ namespace SmartExpenseTracker.Api.IntegrationTests
                 header.GetProperty("example").GetString().Should().Be("\"AAAAAAAAB9E=\"");
             }
 
+            var unchanged = paths.GetProperty("/api/expenses/{id}").GetProperty("put").GetProperty("responses").GetProperty("200");
+            unchanged.GetProperty("description").GetString().Should().Contain("No persisted values changed");
+            unchanged.GetProperty("content").GetProperty("application/json").GetProperty("schema")
+                .GetProperty("$ref").GetString().Should().EndWith("/ExpenseUnchangedResponse");
+            var properties = document.RootElement.GetProperty("components").GetProperty("schemas")
+                .GetProperty("ExpenseUnchangedResponse").GetProperty("properties");
+            properties.GetProperty("updated").GetProperty("type").GetString().Should().Be("boolean");
+            properties.GetProperty("reason").GetProperty("type").GetString().Should().Be("string");
+
             foreach (var (path, method, status) in new[] { ("/api/expenses", "post", "201"),
-                ("/api/expenses/{id}", "get", "200"), ("/api/expenses/{id}", "put", "204") })
+                ("/api/expenses/{id}", "get", "200"), ("/api/expenses/{id}", "put", "204"), ("/api/expenses/{id}", "put", "200") })
             {
                 paths.GetProperty(path).GetProperty(method).GetProperty("responses").GetProperty(status)
                     .GetProperty("headers").GetProperty("ETag").GetProperty("description").GetString()
@@ -56,7 +65,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
                 ("/api/expenses", "post", "Create an expense with a conversion snapshot.", ["201", "400", "409", "503"]),
                 ("/api/expenses", "get", "List, filter and sort expenses.", ["200", "400"]),
                 ("/api/expenses/{id}", "get", "Get an expense and its stored conversion.", ["200", "404"]),
-                ("/api/expenses/{id}", "put", "Update an expense.", ["204", "400", "404", "409", "412", "428", "503"]),
+                ("/api/expenses/{id}", "put", "Update an expense.", ["200", "204", "400", "404", "409", "412", "428", "503"]),
                 ("/api/expenses/{id}", "delete", "Delete an expense.", ["204", "400", "412", "428"]),
                 ("/api/reports/by-category", "get", "Get total spending by category.", ["200"]),
                 ("/api/reports/by-period", "get", "Get total spending by calendar period.", ["200", "400"]),

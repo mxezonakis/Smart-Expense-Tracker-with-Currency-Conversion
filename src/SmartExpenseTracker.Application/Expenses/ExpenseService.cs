@@ -24,7 +24,7 @@ namespace SmartExpenseTracker.Application.Expenses
             return await _expenses.CreateAsync(expense, cancellationToken);
         }
 
-        public async Task<byte[]?> UpdateAsync(int id, ExpenseInput input, byte[] expectedVersion, CancellationToken cancellationToken)
+        public async Task<ExpenseUpdateResult?> UpdateAsync(int id, ExpenseInput input, byte[] expectedVersion, CancellationToken cancellationToken)
         {
             var previous = await _expenses.FindAsync(id, cancellationToken);
             if (previous is null)
@@ -43,7 +43,13 @@ namespace SmartExpenseTracker.Application.Expenses
             }
 
             var replacement = await PrepareAsync(input, previous.Expense, cancellationToken);
-            return await _expenses.UpdateAsync(previous, replacement, cancellationToken);
+            if (replacement == previous.Expense)
+            {
+                return new ExpenseUpdateResult(false, previous.Version);
+            }
+
+            var version = await _expenses.UpdateAsync(previous, replacement, cancellationToken);
+            return new ExpenseUpdateResult(true, version);
         }
 
         public Task<ExpenseSnapshot?> FindAsync(int id, CancellationToken cancellationToken)

@@ -23,6 +23,11 @@ namespace SmartExpenseTracker.Api.Contracts
         internal ExpenseInput ToInput() => new ExpenseInput(Amount, Currency, CategoryId, Date, Description);
     }
 
+    /// <summary>A validated replacement with no effective persisted changes.</summary>
+    /// <param name="Updated">False because no database update was performed.</param>
+    /// <param name="Reason">The reason no update was performed: unchanged.</param>
+    public sealed record ExpenseUnchangedResponse(bool Updated, string Reason);
+
     // Decimal parsing can round excess significant digits before application validation sees them.
     internal sealed class ExpenseAmountConverter : JsonConverter<decimal>
     {

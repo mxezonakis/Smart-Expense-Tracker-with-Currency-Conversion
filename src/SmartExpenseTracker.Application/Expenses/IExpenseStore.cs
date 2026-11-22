@@ -13,6 +13,8 @@ namespace SmartExpenseTracker.Application.Expenses
     // Internal workflow state, never part of the HTTP request or response contract.
     public sealed record ExpenseSnapshot(Expense Expense, byte[] Version);
 
+    public sealed record ExpenseUpdateResult(bool Updated, byte[] Version);
+
     public interface IExpenseStore
     {
         Task<bool> HasConflictingDatasetCurrencyAsync(string baseCurrency, CancellationToken cancellationToken);

@@ -124,6 +124,13 @@ namespace SmartExpenseTracker.Api
                     };
                 }
 
+                if (path == "api/expenses/{id}" && method == "PUT" &&
+                    operation.Responses?["200"] is OpenApiResponse unchanged &&
+                    operation.Responses?["204"] is OpenApiResponse updated)
+                {
+                    unchanged.Headers = updated.Headers;
+                }
+
                 return Task.CompletedTask;
             }));
             services.AddOptions<OpenApiOptions>("v1")

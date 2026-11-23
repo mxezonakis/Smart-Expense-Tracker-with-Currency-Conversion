@@ -34,7 +34,7 @@ namespace SmartExpenseTracker.Api.Controllers
 
         /// <summary>Get total spending by calendar period.</summary>
         /// <remarks>Groups the whole dataset by expense date and sums stored converted amounts. Weekly and monthly keys are the first calendar date of the period; no exchange-rate lookup is performed.</remarks>
-        /// <param name="period">Required grouping: day, week or month (case-insensitive). Weeks start on Monday.</param>
+        /// <param name="period">Use lowercase day, week or month. Weeks start on Monday.</param>
         /// <param name="cancellationToken">Cancels the request and supported database or provider operations.</param>
         /// <returns>The HTTP result described below.</returns>
         /// <response code="200">Totals for periods containing expenses, ordered by period start; empty periods are omitted.</response>

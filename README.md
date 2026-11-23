@@ -94,7 +94,7 @@ A base-currency request can use the same body with currency EUR. Its response sh
 {"id":1,"amount":10,"currency":"EUR","categoryId":1,"date":"2026-11-20","description":"Train ticket","baseCurrency":"EUR","appliedRate":1,"convertedAmount":10,"provider":null,"publishedAt":null,"isFallback":false}
 ```
 
-A USD response has the same fields with its applied rate, converted amount, provider publication timestamp and fallback flag. IDs and live rate values vary. The 201 response includes Location, the saved expense and its strong ETag. Individual GET responses also include ETag; the JSON body is unchanged. GET /api/expenses returns a JSON array of expenses. GET, PUT and DELETE /api/expenses/{id} read, replace and delete one expense. PUT takes the same body as POST. Changed-value PUT and successful DELETE return 204. An unchanged PUT returns 200 with `{"updated":false,"reason":"unchanged"}` and its unchanged ETag.
+A USD response has the same fields with its applied rate, converted amount, provider publication timestamp and fallback flag. IDs and live rate values vary. The 201 response includes Location, the saved expense and its strong ETag. Individual GET responses also include ETag; the JSON body is unchanged. GET /api/expenses returns a JSON array of expenses. GET, PUT and DELETE /api/expenses/{id} read, replace and delete one expense. PUT takes the same body as POST. Changed-value PUT and successful DELETE return 204. An unchanged PUT returns 200 with `{"updated":false,"reason":"unchanged"}`.
 
 Example: `GET /api/expenses?from=2026-01-01&to=2026-01-31&categoryId=2&currency=usd&sortBy=amount&direction=asc`.
 
@@ -129,7 +129,7 @@ Content-Type: application/json
 {"amount":10.00,"currency":"USD","categoryId":1,"date":"2026-11-20","description":"Updated ticket"}
 ```
 
-A PUT that changes persisted values returns 204 and a new ETag. A normalized, validated replacement equal to the original returns 200 with `{"updated":false,"reason":"unchanged"}` and the initially read ETag; it performs no UPDATE and does not advance rowversion. For deletion, GET the current expense again and use its returned ETag (or use the new ETag from the successful PUT):
+A PUT that changes persisted values returns 204. A normalized replacement equal to the original returns 200 with `{"updated":false,"reason":"unchanged"}` and preserves the rowversion. After PUT, GET the current expense to obtain the ETag for the next conditional update or deletion.
 
 ```http
 DELETE /api/expenses/1
@@ -163,7 +163,7 @@ The registered provider is ExchangeRate-API Open Access at https://open.er-api.c
 
 Apply the EF Core migrations using the database update command above before resolving rates. Migration `20261120155857_AddRateSnapshots` targets SQL Server 2022 and stores one complete normalized table per provider and dataset base. The composite primary key and conditional update protect newer publications during concurrent saves.
 
-The resolver fetches on demand. A daily table stays fresh until its usable advertised next update. If the hint is missing, already past, or more than 30 hours after publication, the default refresh deadline is six hours after retrieval. The maximum quote age defaults to 48 hours from original publication and is configurable through `RateCache__MaximumAge`. Re-fetching the same publication, reading SQL and serving fallback never extend that cutoff.
+The resolver fetches on demand. A daily table stays fresh until its usable advertised next update. If the hint is missing, already past, or more than 30 hours after publication, the default refresh deadline is six hours after retrieval. The maximum quote age is 48 hours from original publication. Set `RateCache__MaximumAge` to a shorter interval for a stricter limit. A replacement table is accepted only if every rate remains positive and fits `decimal(18,12)` after rounding. Re-fetching the same publication, reading SQL and serving fallback never extend that cutoff.
 
 During an outage, callers share one refresh per process. Eligible stale data carries a fallback flag. Without eligible data, resolution fails with `RateUnavailableException`. The retry cooldown defaults to 20 minutes for HTTP 429 Too Many Requests and 2 minutes for other handled refresh failures (other HTTP errors, network failures, timeouts/cancellation of the shared refresh, and invalid responses). The cooldown starts when the failure is handled; the first request at or after its deadline can refresh. No automatic Retry-After handling is performed. The shared I/O timeout remains 30 seconds. A caller can cancel its own wait. Different API instances can refresh independently. Each optional SQL operation gets at most one quarter of the shared timeout (7.5 seconds by default). A failed or timed-out save leaves an eligible live table in memory. Restart recovery depends on a successful durable save. After provider failure, sequential misses skip both SQL and HTTP until the retry deadline. The next request then checks SQL again, so another process can supply a recovered snapshot.
 

@@ -112,7 +112,6 @@ namespace SmartExpenseTracker.Api
                 {
                     ("api/expenses", "POST") => "201",
                     ("api/expenses/{id}", "GET") => "200",
-                    ("api/expenses/{id}", "PUT") => "204",
                     _ => null
                 };
                 if (etagStatus is not null && operation.Responses?[etagStatus] is OpenApiResponse response)
@@ -122,13 +121,6 @@ namespace SmartExpenseTracker.Api
                         Description = "Strong opaque version of this expense. Send the complete quoted value as If-Match on the next PUT or DELETE.",
                         Schema = new OpenApiSchema { Type = JsonSchemaType.String, Examples = [JsonValue.Create("\"AAAAAAAAB9E=\"")!] }
                     };
-                }
-
-                if (path == "api/expenses/{id}" && method == "PUT" &&
-                    operation.Responses?["200"] is OpenApiResponse unchanged &&
-                    operation.Responses?["204"] is OpenApiResponse updated)
-                {
-                    unchanged.Headers = updated.Headers;
                 }
 
                 return Task.CompletedTask;

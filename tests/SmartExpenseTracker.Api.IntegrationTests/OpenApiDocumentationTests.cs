@@ -43,11 +43,19 @@ namespace SmartExpenseTracker.Api.IntegrationTests
             properties.GetProperty("reason").GetProperty("type").GetString().Should().Be("string");
 
             foreach (var (path, method, status) in new[] { ("/api/expenses", "post", "201"),
-                ("/api/expenses/{id}", "get", "200"), ("/api/expenses/{id}", "put", "204"), ("/api/expenses/{id}", "put", "200") })
+                ("/api/expenses/{id}", "get", "200") })
             {
                 paths.GetProperty(path).GetProperty(method).GetProperty("responses").GetProperty(status)
                     .GetProperty("headers").GetProperty("ETag").GetProperty("description").GetString()
                     .Should().Contain("If-Match");
+            }
+
+            var putResponses = paths.GetProperty("/api/expenses/{id}").GetProperty("put").GetProperty("responses");
+            foreach (var status in new[] { "200", "204" })
+            {
+                var hasEtag = putResponses.GetProperty(status).TryGetProperty("headers", out var headers) &&
+                    headers.TryGetProperty("ETag", out _);
+                hasEtag.Should().BeFalse();
             }
         }
 

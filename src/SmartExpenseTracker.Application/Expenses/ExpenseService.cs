@@ -133,8 +133,7 @@ namespace SmartExpenseTracker.Application.Expenses
                 throw new ExpenseValidationException("currency", "Currency is unsupported by the exchange-rate table.");
             }
 
-            var applied = decimal.Round(rate, 12, MidpointRounding.ToEven);
-            if (applied is <= 0m or >= 1000000m)
+            if (!ConversionSnapshot.TryGetAppliedRate(rate, out var applied))
             {
                 throw new RateUnavailableException();
             }

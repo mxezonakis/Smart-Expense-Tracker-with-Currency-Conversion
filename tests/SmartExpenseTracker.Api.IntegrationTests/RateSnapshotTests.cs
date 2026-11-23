@@ -83,6 +83,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         }
 
         [TestCase("{}", 0)]
+        [TestCase("{\"EUR\":1,\"USD\":0.0000000000004}", 0)]
         [TestCase("{\"EUR\":1,\"USD\":2}", 72)]
         [TestCase("{\"EUR\":1,\"USD\":2,\"USD\":3}", 0)]
         public async Task LiveProviderRepairsInvalidRowForOfflineRestart(string rates, int futureHours)

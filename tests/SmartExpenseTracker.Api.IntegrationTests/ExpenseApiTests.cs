@@ -177,10 +177,13 @@ namespace SmartExpenseTracker.Api.IntegrationTests
 
             // Assert
             changed.StatusCode.Should().Be(HttpStatusCode.NoContent);
-            changed.Headers.ETag!.ToString().Should().NotBe(staleTag);
+            changed.Headers.ETag.Should().BeNull();
 
             // Arrange
-            var winner = (await _client.GetFromJsonAsync<ExpenseResponse>(created.Headers.Location, Token))!;
+            using var current = await _client.GetAsync(created.Headers.Location, Token);
+            current.EnsureSuccessStatusCode();
+            current.Headers.ETag!.ToString().Should().NotBe(staleTag);
+            var winner = (await current.Content.ReadFromJsonAsync<ExpenseResponse>(Token))!;
             var version = await ReadVersionAsync(winner.Id);
             var calls = _rates.Calls;
             _rates.Available = false;
@@ -401,7 +404,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
             var updatedVersion = await ReadVersionAsync(original.Id);
             if (noOp)
             {
-                await AssertUnchanged(response, version);
+                await AssertUnchanged(response);
                 observer.AssertReadOnly();
                 updatedVersion.Should().Equal(version);
             }
@@ -409,7 +412,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
             {
                 observer.AssertSingleReadAndVersion(version);
                 updatedVersion.Should().NotEqual(version);
-                response.Headers.ETag!.Tag.Should().Be($"\"{Convert.ToBase64String(updatedVersion)}\"");
+                response.Headers.ETag.Should().BeNull();
                 observer.Commands.Single(sql => sql.Contains("UPDATE [Expenses]", StringComparison.Ordinal))
                     .Should().NotContain("SET [Amount]");
             }
@@ -476,7 +479,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
             // Assert
             if (noOp)
             {
-                await AssertUnchanged(stale, version);
+                await AssertUnchanged(stale);
                 observer.AssertReadOnly();
                 competed.Should().Be(!duringPersistence, "a no-op never reaches the SQL UPDATE interception point");
                 if (duringPersistence)
@@ -654,14 +657,14 @@ namespace SmartExpenseTracker.Api.IntegrationTests
             return (byte[])(await command.ExecuteScalarAsync(Token))!;
         }
 
-        private static async Task AssertUnchanged(HttpResponseMessage response, byte[] version)
+        private static async Task AssertUnchanged(HttpResponseMessage response)
         {
             response.StatusCode.Should().Be(HttpStatusCode.OK);
             using var body = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync(Token));
             body.RootElement.EnumerateObject().Select(property => property.Name).Should().BeEquivalentTo("updated", "reason");
             body.RootElement.GetProperty("updated").GetBoolean().Should().BeFalse();
             body.RootElement.GetProperty("reason").GetString().Should().Be("unchanged");
-            response.Headers.ETag!.Tag.Should().Be($"\"{Convert.ToBase64String(version)}\"");
+            response.Headers.ETag.Should().BeNull();
         }
 
         [Test]
@@ -689,7 +692,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
                 input with { Amount = 10.000m, Currency = " uSd ", Description = "   " }, Token);
 
             // Assert
-            await AssertUnchanged(response, version);
+            await AssertUnchanged(response);
             observer.AssertReadOnly();
             var actual = (await ReadVersionAsync(original.Id));
 

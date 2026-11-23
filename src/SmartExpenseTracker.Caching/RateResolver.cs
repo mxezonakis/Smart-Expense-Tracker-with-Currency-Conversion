@@ -95,7 +95,7 @@ namespace SmartExpenseTracker.Caching
                             Remember(stored);
                         }
                     }
-                    catch (Exception ex) when (ex is DbException or InvalidDataException or TimeoutException or OperationCanceledException)
+                    catch (Exception ex) when (IsRecoverableStoreFailure(ex))
                     {
                         _logger.LogWarning("Durable rate read failed ({FailureType}).", ex.GetType().Name);
                     }
@@ -108,10 +108,7 @@ namespace SmartExpenseTracker.Caching
                     return new ResolvedRates(previous, false);
                 }
 
-                if (token.IsCancellationRequested)
-                {
-                    return Fallback(previous);
-                }
+                token.ThrowIfCancellationRequested();
 
                 var provider = scope.ServiceProvider.GetRequiredService<IExchangeRateProvider>();
                 var table = await provider.GetLatestAsync(_key.Currency, token);
@@ -143,7 +140,7 @@ namespace SmartExpenseTracker.Caching
                         _logger.LogWarning("Durable rate store returned an unusable table.");
                     }
                 }
-                catch (Exception ex) when (ex is DbException or InvalidDataException or TimeoutException or OperationCanceledException)
+                catch (Exception ex) when (IsRecoverableStoreFailure(ex))
                 {
                     _logger.LogWarning("Durable rate write failed ({FailureType}).", ex.GetType().Name);
                 }
@@ -176,6 +173,13 @@ namespace SmartExpenseTracker.Caching
                     _flight = null;
                 }
             }
+        }
+
+        private static bool IsRecoverableStoreFailure(Exception exception)
+        {
+            // The SQL Server execution strategy wraps transient query failures.
+            return exception is DbException or InvalidDataException or TimeoutException or OperationCanceledException
+                or InvalidOperationException { InnerException: DbException or TimeoutException };
         }
 
         private void ClearRetry()

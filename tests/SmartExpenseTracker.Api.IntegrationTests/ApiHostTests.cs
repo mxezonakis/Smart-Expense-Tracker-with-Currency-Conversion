@@ -14,6 +14,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         [TestCase("")]
         [TestCase("?period=")]
         [TestCase("?period=quarter")]
+        [TestCase("?period=Day")]
         [TestCase("?period=1")]
         public async Task InvalidReportPeriodReturnsValidationProblem(string query)
         {
@@ -175,6 +176,9 @@ namespace SmartExpenseTracker.Api.IntegrationTests
             var listParameters = paths.GetProperty("/api/expenses").GetProperty("get").GetProperty("parameters");
             listParameters.EnumerateArray().Select(parameter => parameter.GetProperty("name").GetString()!.ToLowerInvariant())
                 .Should().BeEquivalentTo("from", "to", "categoryid", "currency", "sortby", "direction");
+            var period = paths.GetProperty("/api/reports/by-period").GetProperty("get").GetProperty("parameters")
+                .EnumerateArray().Single(parameter => parameter.GetProperty("name").GetString() == "period");
+            period.GetProperty("description").GetString().Should().Contain("lowercase");
             var expenseItem = paths.GetProperty("/api/expenses/{id}");
             expenseItem.EnumerateObject().Select(operation => operation.Name).Should().BeEquivalentTo("get", "put", "delete");
             expenseItem.GetProperty("put").GetProperty("responses").TryGetProperty("503", out _).Should().BeTrue();

@@ -1,6 +1,9 @@
 using System.Collections.Frozen;
+using System.Data.Common;
 using System.Net;
 using FakeItEasy;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -10,6 +13,7 @@ using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using NUnit.Framework;
 using SmartExpenseTracker.Integrations;
+using SmartExpenseTracker.Persistence;
 using SmartExpenseTracker.Persistence.ExchangeRates;
 
 namespace SmartExpenseTracker.Caching.UnitTests
@@ -88,7 +92,7 @@ namespace SmartExpenseTracker.Caching.UnitTests
         [TestCase("RefreshInterval", "00:00:00")]
         [TestCase("RefreshInterval", "-00:00:01")]
         [TestCase("MaximumAge", "05:59:59")]
-        [TestCase("MaximumAge", "365.00:00:00.0000001")]
+        [TestCase("MaximumAge", "2.00:00:00.0000001")]
         [TestCase("RefreshTimeout", "00:00:00")]
         [TestCase("RefreshTimeout", "-00:00:01")]
         [TestCase("RefreshTimeout", "00:05:00.0000001")]
@@ -110,8 +114,8 @@ namespace SmartExpenseTracker.Caching.UnitTests
             // Arrange
             using var host = CreateHost(configuration: new Dictionary<string, string?>
             {
-                ["RateCache:RefreshInterval"] = "365.00:00:00",
-                ["RateCache:MaximumAge"] = "365.00:00:00",
+                ["RateCache:RefreshInterval"] = "2.00:00:00",
+                ["RateCache:MaximumAge"] = "2.00:00:00",
                 ["RateCache:RefreshTimeout"] = "00:05:00"
             });
 
@@ -119,7 +123,7 @@ namespace SmartExpenseTracker.Caching.UnitTests
             var options = host.GetRequiredService<IOptions<RateCacheOptions>>().Value;
 
             // Assert
-            Assert.That(options.RefreshInterval, Is.EqualTo(TimeSpan.FromDays(365)));
+            Assert.That(options.RefreshInterval, Is.EqualTo(TimeSpan.FromHours(48)));
             Assert.That(options.MaximumAge, Is.EqualTo(options.RefreshInterval));
             Assert.That(options.RefreshTimeout, Is.EqualTo(TimeSpan.FromMinutes(5)));
         }
@@ -183,6 +187,29 @@ namespace SmartExpenseTracker.Caching.UnitTests
 
             // Assert
             Assert.That(actual, Is.EqualTo(new ResolvedRates(original.Snapshot, true)));
+            Assert.That(_saved, Is.EqualTo(original.Snapshot));
+            A.CallTo(() => _store.SaveLatestAsync(A<RateSnapshot>._, A<CancellationToken>._)).MustHaveHappenedOnceExactly();
+        }
+
+        [TestCase("0.0000000000005")]
+        [TestCase("999999.9999999999995")]
+        public async Task UnrepresentableReplacementKeepsEligibleRatesInMemoryAndStorage(string rawRate)
+        {
+            // Arrange
+            var original = await Resolve();
+            _clock.Advance(TimeSpan.FromHours(7));
+            var rate = decimal.Parse(rawRate, System.Globalization.CultureInfo.InvariantCulture);
+            _table = _table with
+            {
+                PublishedAt = _clock.GetUtcNow(),
+                BaseUnitsPerCurrencyUnit = new Dictionary<string, decimal> { ["EUR"] = 1m, ["USD"] = rate }.ToFrozenDictionary()
+            };
+
+            // Act
+            var result = await Resolve();
+
+            // Assert
+            Assert.That(result, Is.EqualTo(new ResolvedRates(original.Snapshot, true)));
             Assert.That(_saved, Is.EqualTo(original.Snapshot));
             A.CallTo(() => _store.SaveLatestAsync(A<RateSnapshot>._, A<CancellationToken>._)).MustHaveHappenedOnceExactly();
         }
@@ -316,7 +343,7 @@ namespace SmartExpenseTracker.Caching.UnitTests
 
         [TestCase(true)]
         [TestCase(false)]
-        public async Task SharedDeadlineAfterDurableReadDoesNotStartProvider(bool hasFallback)
+        public async Task SharedDeadlineAfterDurableReadSuppressesFurtherReadsAndProviderCalls(bool hasFallback)
         {
             // Arrange
             var stored = hasFallback ? new RateSnapshot(ToStoredTable(_table with { PublishedAt = _clock.GetUtcNow().AddHours(-7) }),
@@ -334,6 +361,7 @@ namespace SmartExpenseTracker.Caching.UnitTests
 
                 // Assert
                 Assert.That(actual, Is.EqualTo(new ResolvedRates(stored!, true)));
+                Assert.That(await Resolve(), Is.EqualTo(actual));
             }
             else
             {
@@ -341,10 +369,12 @@ namespace SmartExpenseTracker.Caching.UnitTests
                 AsyncTestDelegate act = () => Resolve();
 
                 // Assert
-                Assert.ThrowsAsync<RateUnavailableException>(act);
+                Assert.ThrowsAsync<RateUnavailableException>(act, "the shared deadline expired");
+                Assert.ThrowsAsync<RateUnavailableException>(act, "the next request is within the retry cooldown");
             }
 
             // Assert
+            A.CallTo(() => _store.ReadAsync("Test", "EUR", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustNotHaveHappened();
             A.CallTo(() => _store.SaveLatestAsync(A<RateSnapshot>._, A<CancellationToken>._)).MustNotHaveHappened();
         }
@@ -424,7 +454,45 @@ namespace SmartExpenseTracker.Caching.UnitTests
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
         }
 
-        private sealed class StoreException : System.Data.Common.DbException
+        [Test]
+        public async Task SqlServerExecutionStrategyTimeoutStillAllowsLiveRatesAndCacheReuse()
+        {
+            // Arrange
+            var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:SmartExpenseTracker"] = "Server=unused;Database=unused;Integrated Security=true"
+            }).Build();
+            var services = new ServiceCollection();
+            services.AddLogging();
+            services.AddSingleton<TimeProvider>(_clock);
+            services.AddSingleton(_provider);
+            services.AddPersistence(configuration);
+            services.ConfigureDbContext<SmartExpenseTrackerDbContext>(options => options.AddInterceptors(new ConnectionTimeout()));
+            services.AddRateCaching(configuration, "Test");
+            await using var host = services.BuildServiceProvider();
+            var resolver = host.GetRequiredService<IRateResolver>();
+
+            // Act
+            var live = await resolver.ResolveAsync(Token);
+            var cached = await resolver.ResolveAsync(Token);
+
+            // Assert
+            Assert.That(live.IsFallback, Is.False);
+            Assert.That(live.Snapshot.Table, Is.EqualTo(ToStoredTable(_table)));
+            Assert.That(cached, Is.EqualTo(live));
+            A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
+        }
+
+        private sealed class ConnectionTimeout : DbConnectionInterceptor
+        {
+            public override ValueTask<InterceptionResult> ConnectionOpeningAsync(DbConnection connection,
+                ConnectionEventData eventData, InterceptionResult result, CancellationToken cancellationToken = default)
+            {
+                throw new TimeoutException("Simulated SQL connection timeout.");
+            }
+        }
+
+        private sealed class StoreException : DbException
         {
         }
 

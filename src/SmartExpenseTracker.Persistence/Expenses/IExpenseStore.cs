@@ -1,7 +1,15 @@
 namespace SmartExpenseTracker.Persistence.Expenses
 {
     public sealed record ConversionSnapshot(string BaseCurrency, decimal AppliedRate, decimal ConvertedAmount,
-        string? Provider, DateTimeOffset? PublishedAt, bool IsFallback);
+        string? Provider, DateTimeOffset? PublishedAt, bool IsFallback)
+    {
+        // AppliedRate is stored as decimal(18,12).
+        public static bool TryGetAppliedRate(decimal rate, out decimal appliedRate)
+        {
+            appliedRate = decimal.Round(rate, 12, MidpointRounding.ToEven);
+            return appliedRate is > 0m and < 1000000m;
+        }
+    }
 
     public sealed record Expense(int Id, decimal Amount, string Currency, int CategoryId, DateOnly Date,
         string? Description, ConversionSnapshot Conversion);

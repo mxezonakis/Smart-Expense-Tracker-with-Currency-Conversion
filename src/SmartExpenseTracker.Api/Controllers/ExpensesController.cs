@@ -81,13 +81,13 @@ namespace SmartExpenseTracker.Api.Controllers
         }
 
         /// <summary>Update an expense.</summary>
-        /// <remarks>Requires exactly one specific strong If-Match ETag obtained from GET or POST. Recalculates the conversion only when the original amount or normalized currency changes. Category, date and description edits preserve the stored rate, converted amount and provider metadata. Unchanged normalized values return 200 without a write and with the initially read ETag. This path does not detect every concurrent change after the initial version check. Weak tags, wildcard and multiple tags are unsupported.</remarks>
+        /// <remarks>Requires exactly one specific strong If-Match ETag obtained from GET or POST. Recalculates the conversion only when the original amount or normalized currency changes. Category, date and description edits preserve the stored rate, converted amount and provider metadata. Unchanged normalized values return 200 without a write. This path does not detect every concurrent change after the initial version check. Weak tags, wildcard and multiple tags are unsupported.</remarks>
         /// <param name="id">The expense identifier.</param>
         /// <param name="cancellationToken">Cancels the request and supported database or provider operations.</param>
         /// <param name="request">The replacement expense fields.</param>
         /// <returns>The HTTP result described below.</returns>
-        /// <response code="200">No persisted values changed; updated is false, reason is unchanged and ETag is the initially read version.</response>
-        /// <response code="204">The expense was updated; ETag contains the new version.</response>
+        /// <response code="200">No persisted values changed. Updated is false and reason is unchanged.</response>
+        /// <response code="204">The expense was updated. GET the expense to obtain its current ETag.</response>
         /// <response code="400">The input or If-Match is invalid or unsupported, the category is missing, or the currency is unsupported by an eligible rate table.</response>
         /// <response code="404">The expense does not exist.</response>
         /// <response code="409">The dataset base currency conflicts with configuration.</response>
@@ -112,7 +112,6 @@ namespace SmartExpenseTracker.Api.Controllers
                 return NotFound();
             }
 
-            Response.Headers.ETag = ExpenseEtags.Format(result.Version);
             return result.Updated ? NoContent() : Ok(new ExpenseUnchangedResponse(false, "unchanged"));
         }
 

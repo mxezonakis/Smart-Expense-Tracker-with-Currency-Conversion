@@ -1,3 +1,5 @@
+using SmartExpenseTracker.Persistence.Expenses;
+
 namespace SmartExpenseTracker.Persistence.ExchangeRates
 {
     public sealed record RateSnapshot(StoredExchangeRateTable Table, DateTimeOffset RetrievedAt)
@@ -10,7 +12,7 @@ namespace SmartExpenseTracker.Persistence.ExchangeRates
                 RetrievedAt > DateTimeOffset.UnixEpoch && Table.PublishedAt - RetrievedAt <= TimeSpan.FromMinutes(2) &&
                 Table.BaseUnitsPerCurrencyUnit is { Count: > 1 } rates &&
                 rates.TryGetValue(Table.BaseCurrency, out var identity) && identity == 1m &&
-                rates.All(rate => IsCurrencyCode(rate.Key) && rate.Value > 0m);
+                rates.All(rate => IsCurrencyCode(rate.Key) && ConversionSnapshot.TryGetAppliedRate(rate.Value, out _));
         }
 
         private static bool IsCurrencyCode(string? code)

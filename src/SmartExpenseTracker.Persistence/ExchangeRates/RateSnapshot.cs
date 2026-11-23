@@ -5,23 +5,72 @@ namespace SmartExpenseTracker.Persistence.ExchangeRates
 {
     public sealed record RateSnapshot(StoredExchangeRateTable Table, DateTimeOffset RetrievedAt)
     {
+        private static readonly TimeSpan _allowedClockSkew = TimeSpan.FromMinutes(2);
+
         public FrozenDictionary<string, StoredCurrencyRate> FallbackRates { get; init; } = FrozenDictionary<string, StoredCurrencyRate>.Empty;
 
         public bool IsValidAt(DateTimeOffset now)
         {
-            return Table != null && !string.IsNullOrWhiteSpace(Table.Provider) && Table.Provider.Length <= 64 &&
-                IsCurrencyCode(Table.BaseCurrency) && Table.PublishedAt > DateTimeOffset.UnixEpoch &&
-                RetrievedAt - now <= TimeSpan.FromMinutes(2) && Table.PublishedAt - now <= TimeSpan.FromMinutes(2) &&
-                RetrievedAt > DateTimeOffset.UnixEpoch && Table.PublishedAt - RetrievedAt <= TimeSpan.FromMinutes(2) &&
-                Table.BaseUnitsPerCurrencyUnit is { Count: > 1 } rates &&
-                rates.TryGetValue(Table.BaseCurrency, out var identity) && identity == 1m &&
-                rates.All(rate => IsCurrencyCode(rate.Key) && rate.Value > 0m) &&
-                FallbackRates.All(pair => rates.TryGetValue(pair.Key, out var current) &&
-                    !ConversionSnapshot.TryGetAppliedRate(current, out _) && pair.Value is { } quote &&
-                    ConversionSnapshot.TryGetAppliedRate(quote.Rate, out _) &&
-                    quote.PublishedAt > DateTimeOffset.UnixEpoch && quote.PublishedAt <= Table.PublishedAt &&
-                    quote.RetrievedAt > DateTimeOffset.UnixEpoch && quote.RetrievedAt - now <= TimeSpan.FromMinutes(2) &&
-                    quote.PublishedAt - quote.RetrievedAt <= TimeSpan.FromMinutes(2));
+            if (Table == null || string.IsNullOrWhiteSpace(Table.Provider) || Table.Provider.Length > 64)
+            {
+                return false;
+            }
+
+            return ValidTimestamps(Table.PublishedAt, RetrievedAt, now)
+                && HasValidPublishedRates()
+                && HasValidFallbackRates(now);
+        }
+
+        private static bool ValidTimestamps(DateTimeOffset publishedAt, DateTimeOffset retrievedAt, DateTimeOffset now)
+        {
+            if (publishedAt <= DateTimeOffset.UnixEpoch || retrievedAt <= DateTimeOffset.UnixEpoch)
+            {
+                return false;
+            }
+
+            return publishedAt - now <= _allowedClockSkew
+                && retrievedAt - now <= _allowedClockSkew
+                && publishedAt - retrievedAt <= _allowedClockSkew;
+        }
+
+        private bool HasValidPublishedRates()
+        {
+            var rates = Table.BaseUnitsPerCurrencyUnit;
+            if (rates == null || rates.Count < 2 || !IsCurrencyCode(Table.BaseCurrency))
+            {
+                return false;
+            }
+
+            if (!rates.TryGetValue(Table.BaseCurrency, out var baseRate) || baseRate != 1m)
+            {
+                return false;
+            }
+
+            return rates.All(rate => IsCurrencyCode(rate.Key) && rate.Value > 0m);
+        }
+
+        private bool HasValidFallbackRates(DateTimeOffset now)
+        {
+            foreach (var (currency, quote) in FallbackRates)
+            {
+                if (!Table.BaseUnitsPerCurrencyUnit.TryGetValue(currency, out var current) ||
+                    ConversionSnapshot.TryGetAppliedRate(current, out _))
+                {
+                    return false;
+                }
+
+                if (quote == null || !ConversionSnapshot.TryGetAppliedRate(quote.Rate, out _))
+                {
+                    return false;
+                }
+
+                if (quote.PublishedAt > Table.PublishedAt || !ValidTimestamps(quote.PublishedAt, quote.RetrievedAt, now))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         // Keep the newest publication, then the newest retrieval. This instance wins an exact tie.

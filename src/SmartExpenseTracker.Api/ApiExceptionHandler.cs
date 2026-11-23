@@ -1,8 +1,9 @@
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 using SmartExpenseTracker.Application.Categories;
-using SmartExpenseTracker.Application.ExchangeRates;
-using SmartExpenseTracker.Application.Expenses;
+using SmartExpenseTracker.Caching;
+using SmartExpenseTracker.Persistence.Categories;
+using SmartExpenseTracker.Persistence.Expenses;
 
 namespace SmartExpenseTracker.Api
 {

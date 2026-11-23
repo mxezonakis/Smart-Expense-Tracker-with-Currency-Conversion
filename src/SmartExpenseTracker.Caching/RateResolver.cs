@@ -4,7 +4,8 @@ using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using SmartExpenseTracker.Application.ExchangeRates;
+using SmartExpenseTracker.Integrations;
+using SmartExpenseTracker.Persistence.ExchangeRates;
 
 namespace SmartExpenseTracker.Caching
 {
@@ -115,7 +116,14 @@ namespace SmartExpenseTracker.Caching
                 var provider = scope.ServiceProvider.GetRequiredService<IExchangeRateProvider>();
                 var table = await provider.GetLatestAsync(_key.Currency, token);
                 token.ThrowIfCancellationRequested();
-                var candidate = new RateSnapshot(table, _clock.GetUtcNow());
+                if (table is null)
+                {
+                    throw new InvalidDataException("Unusable exchange-rate table.");
+                }
+
+                var storedTable = new StoredExchangeRateTable(table.Provider, table.BaseCurrency, table.PublishedAt,
+                    table.BaseUnitsPerCurrencyUnit, table.NextUpdateAt);
+                var candidate = new RateSnapshot(storedTable, _clock.GetUtcNow());
                 if (!Valid(candidate, candidate.RetrievedAt) || (previous != null && table.PublishedAt < previous.Table.PublishedAt))
                 {
                     throw new InvalidDataException("Unusable exchange-rate table.");

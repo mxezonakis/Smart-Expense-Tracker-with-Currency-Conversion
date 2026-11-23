@@ -31,14 +31,15 @@ tests/
 | Project | Direct project references | Responsibility |
 | --- | --- | --- |
 | `SmartExpenseTracker.Api` | Application, Persistence, Integrations, Caching | ASP.NET Core host, MVC controllers, HTTP contracts, middleware, ProblemDetails, OpenAPI and DI composition |
-| `SmartExpenseTracker.Application` | None | Application models, business workflows, business rules and dependency contracts |
-| `SmartExpenseTracker.Persistence` | Application | EF Core, SQL Server, relational queries, migrations and durable stores |
-| `SmartExpenseTracker.Integrations` | Application | Outbound HTTP provider adapters, typed clients and response mapping |
-| `SmartExpenseTracker.Caching` | Application | Memory cache, rate freshness, refresh coordination and fallback policy |
+| `SmartExpenseTracker.Application` | Caching, Persistence | Application inputs, business workflows, business rules and reporting orchestration |
+| `SmartExpenseTracker.Persistence` | None | Store interfaces and records, EF Core, SQL Server, relational queries, migrations and durable stores |
+| `SmartExpenseTracker.Integrations` | None | Provider interface and rate table, outbound HTTP adapters, typed clients and response mapping |
+| `SmartExpenseTracker.Caching` | Integrations, Persistence | Resolver interface and result, memory cache, rate freshness, refresh coordination and fallback policy |
 
-- `Application` must not depend on ASP.NET Core hosting, EF Core, SQL Server, external provider SDKs or infrastructure implementations.
-- `Persistence`, `Integrations` and `Caching` must not reference one another. Compose their implementations in `Api` using Application-defined contracts.
-- Do not split controllers, service interfaces, client interfaces, domain models or shared helpers into extra assemblies. Organize them within the five approved projects.
+- References flow from higher layers to lower layers. Each interface belongs to the project containing its production implementation. `Api` may reference every production project to compose DI.
+- `Application` calls the interfaces exposed by `Caching` and `Persistence`; `Caching` calls those exposed by `Integrations` and `Persistence`. Neither leaf project references a higher layer or the other leaf. Do not introduce circular references.
+- Keep ASP.NET Core hosting in `Api`, database operations in `Persistence` and provider transport in `Integrations`. Application services use the lower layers' contracts without performing SQL or HTTP operations themselves.
+- Keep the five production projects. Interfaces stay beside their implementations; no interface-only or shared-model assembly is needed for the current design.
 - Do not add a generic repository, MediatR, an event bus, a new infrastructure project or a separate HTTP client project without an explicit requirement and approval.
 - Organize folders by cohesive responsibility, not by creating one folder or interface for every class automatically.
 
@@ -58,6 +59,8 @@ tests/
 Illustrative formatting only (not a required business interface):
 
 ```csharp
+using SmartExpenseTracker.Persistence.Expenses;
+
 namespace SmartExpenseTracker.Application.Expenses
 {
     public sealed class ExpenseService : IExpenseService
@@ -87,7 +90,7 @@ If `.editorconfig` already prescribes incompatible namespace or constructor conv
 
 ## 4. Application workflows and service interfaces
 
-- Define **focused application contracts** only at genuine dependency boundaries or where they improve independent testing.
+- Define focused interfaces at genuine dependency boundaries and keep each in its implementation's project. Application services consume lower-layer contracts through constructor injection.
 - Application services coordinate business operations and validation. Place deterministic business rules in focused models/helpers where they are reusable and testable.
 - Keep provider-specific DTOs, HTTP statuses and EF Core-specific types out of Application contracts.
 - Use explicit, predictable mapping methods or mapping extension classes when the mapping is nontrivial; avoid bringing in an object-mapping framework merely for simple DTO mappings.
@@ -118,16 +121,17 @@ If `.editorconfig` already prescribes incompatible namespace or constructor conv
 
 - Put external exchange-rate provider communication in `SmartExpenseTracker.Integrations`, **not** in controllers, Application services or Caching.
 - Register the provider adapter using `IHttpClientFactory` / a **typed HttpClient** and provider-specific validated options.
-- Use provider-specific transport request/response models internally; map into stable Application models at the boundary. Validate required fields, rate direction, finite/positive rates where applicable, and publication metadata.
+- Keep `IExchangeRateProvider` and its `ExchangeRateTable` contract in Integrations. Use provider-specific transport request/response models internally and map into that contract. Validate required fields, rate direction, finite/positive rates where applicable, and publication metadata.
 - Forward cancellation and handle bounded timeouts. Distinguish invalid upstream payloads, unsupported currencies, HTTP failure statuses, timeouts and client cancellation.
 - Dispose owned request/response messages and streams appropriately. Let `IHttpClientFactory` manage HTTP-handler lifetimes; do not create a new long-lived-handler stack per operation.
 - Retry only when explicitly justified and safe. Do not automatically retry non-idempotent writes or produce uncontrolled retry storms.
 - Keep the provider replaceable without changing Application workflows or public API contracts.
-- Never use live provider calls in automated unit or API integration tests; substitute a controlled `HttpMessageHandler` or an Application-defined provider abstraction.
+- Never use live provider calls in automated unit or API integration tests; substitute a controlled `HttpMessageHandler` or the Integrations-owned `IExchangeRateProvider` interface.
 
 ## 8. Persistence and database design
 
 - Put `DbContext`, EF Core configurations, SQL Server registration, migrations and database-backed implementations exclusively in `SmartExpenseTracker.Persistence`.
+- Keep `ICategoryStore`, `IExpenseStore`, `IReportStore` and `IRateSnapshotStore` in Persistence with their contract records and failure types. Keep EF row types internal to Persistence.
 - Prefer individual `IEntityTypeConfiguration<T>` classes for nontrivial mappings. Explicitly configure money precision, required columns, foreign keys, deletion behavior, unique constraints and relevant indexes.
 - Use a relational model consistent with the approved contracts: expense date handling, original amount/currency, applied exchange rate, converted base amount and quote metadata. Do not invent additional expense fields or reporting semantics.
 - Keep migrations in Persistence, and run them with an appropriate startup project. Do not rely on `EnsureCreated` as a replacement for migration verification.
@@ -139,8 +143,8 @@ If `.editorconfig` already prescribes incompatible namespace or constructor conv
 
 ## 9. Exchange-rate caching and thread safety
 
-- `SmartExpenseTracker.Caching` owns `IMemoryCache`, freshness evaluation, per-key refresh coordination, bounded stale fallback and rate-selection policy.
-- Keep transport in Integrations and durable snapshot storage in Persistence. Access both through Application-defined interfaces; do not add project references between the implementation assemblies.
+- `SmartExpenseTracker.Caching` owns `IRateResolver`, `ResolvedRates`, `RateUnavailableException`, `IMemoryCache`, freshness evaluation, per-key refresh coordination, bounded stale fallback and rate-selection policy.
+- Keep transport in Integrations and durable snapshot storage in Persistence. Caching references both projects and consumes their interfaces. Map the provider's `ExchangeRateTable` to Persistence's `StoredExchangeRateTable` when creating a durable `RateSnapshot`, preserving all values and timestamps. The two leaf projects remain independent.
 - Use **separate fresh TTL and maximum stale age** as specified in the implementation plan. Expired-freshness data may still be eligible for fallback; simply evicting at the fresh TTL is insufficient.
 - Coalesce concurrent refresh attempts per stable provider/base key. Recheck the cache once refresh coordination is acquired; avoid leaked locks, unlimited per-key state and races around completion.
 - Never replace a valid last-known snapshot with a malformed or unsuccessful refresh. Do not reset the original quote age when using a fallback.
@@ -156,7 +160,7 @@ Use the approved four test projects; do not create separate tests for every C# n
 | --- | --- |
 | `SmartExpenseTracker.Application.UnitTests` | Business rules, validation, conversion, rounding and snapshot update rules |
 | `SmartExpenseTracker.Integrations.UnitTests` | HTTP mapping, malformed replies, failures, timeouts and cancellation |
-| `SmartExpenseTracker.Caching.UnitTests` | Fresh/stale boundaries, fallback, deterministic concurrent refresh and cancellation |
+| `SmartExpenseTracker.Caching.UnitTests` | Snapshot validation, provider-to-snapshot mapping, fresh/stale boundaries, fallback, deterministic concurrent refresh and cancellation |
 | `SmartExpenseTracker.Api.IntegrationTests` | Real HTTP requests, SQL Server persistence, constraints, filtering, reporting, errors and statistics |
 
 - Use NUnit with FakeItEasy and a **license-approved, pinned** FluentAssertions version; verify license suitability before adding or changing the package.
@@ -193,7 +197,7 @@ dotnet format style SmartExpenseTracker.slnx --no-restore --verify-no-changes
 Before completing a phase, check:
 
 1. Does the code respect all five production and four test project boundaries?
-2. Is there any prohibited reference between implementation projects?
+2. Do references follow the higher-to-lower direction, with interfaces in their implementations' projects and no circular references?
 3. Are controllers thin, service contracts focused, and models kept at their proper boundaries?
 4. Are C# namespaces, brace placement, constructors and field naming consistent with these instructions?
 5. Are async calls cancellable, with no concurrent access to the same `DbContext`?

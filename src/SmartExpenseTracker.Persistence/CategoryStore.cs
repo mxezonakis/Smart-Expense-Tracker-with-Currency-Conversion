@@ -1,7 +1,7 @@
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
-using SmartExpenseTracker.Application.Categories;
-using SmartExpenseTracker.Application.Expenses;
+using SmartExpenseTracker.Persistence.Categories;
+using SmartExpenseTracker.Persistence.Expenses;
 
 namespace SmartExpenseTracker.Persistence
 {

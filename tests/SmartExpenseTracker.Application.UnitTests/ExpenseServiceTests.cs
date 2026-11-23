@@ -3,9 +3,11 @@ using System.Globalization;
 using FakeItEasy;
 using FluentAssertions;
 using NUnit.Framework;
-using SmartExpenseTracker.Application.Categories;
-using SmartExpenseTracker.Application.ExchangeRates;
 using SmartExpenseTracker.Application.Expenses;
+using SmartExpenseTracker.Caching;
+using SmartExpenseTracker.Persistence.Categories;
+using SmartExpenseTracker.Persistence.ExchangeRates;
+using SmartExpenseTracker.Persistence.Expenses;
 
 namespace SmartExpenseTracker.Application.UnitTests
 {
@@ -33,7 +35,7 @@ namespace SmartExpenseTracker.Application.UnitTests
         private void Quote(decimal rate, bool fallback = false)
         {
             var publication = DateTimeOffset.UnixEpoch.AddYears(55);
-            var table = new ExchangeRateTable("Test", "EUR", publication,
+            var table = new StoredExchangeRateTable("Test", "EUR", publication,
                 new Dictionary<string, decimal> { ["USD"] = rate, ["EUR"] = 1m }.ToFrozenDictionary());
             A.CallTo(() => _resolver.ResolveAsync(Token)).Returns(new ResolvedRates(new RateSnapshot(table, publication), fallback));
         }
@@ -211,7 +213,7 @@ namespace SmartExpenseTracker.Application.UnitTests
         {
             // Arrange
             var publication = DateTimeOffset.UnixEpoch.AddYears(55);
-            var table = new ExchangeRateTable("Test", "GBP", publication,
+            var table = new StoredExchangeRateTable("Test", "GBP", publication,
                 new Dictionary<string, decimal> { ["GBP"] = 1m, ["USD"] = 0.8m }.ToFrozenDictionary());
             A.CallTo(() => _resolver.ResolveAsync(Token)).Returns(new ResolvedRates(new RateSnapshot(table, publication), false));
 
@@ -245,7 +247,7 @@ namespace SmartExpenseTracker.Application.UnitTests
         {
             // Arrange
             var publication = new DateTimeOffset(2030, 1, 2, 14, 0, 0, TimeSpan.FromHours(2));
-            var table = new ExchangeRateTable("Controlled provider", "EUR", publication,
+            var table = new StoredExchangeRateTable("Controlled provider", "EUR", publication,
                 new Dictionary<string, decimal> { ["EUR"] = 1m, ["USD"] = 0.9m }.ToFrozenDictionary());
             A.CallTo(() => _resolver.ResolveAsync(Token)).Returns(new ResolvedRates(new RateSnapshot(table, publication), true));
 

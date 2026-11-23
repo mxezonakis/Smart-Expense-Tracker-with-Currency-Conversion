@@ -6,8 +6,10 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
-using SmartExpenseTracker.Application.ExchangeRates;
+using SmartExpenseTracker.Caching;
+using SmartExpenseTracker.Integrations;
 using SmartExpenseTracker.Persistence;
+using SmartExpenseTracker.Persistence.ExchangeRates;
 using Testcontainers.MsSql;
 
 namespace SmartExpenseTracker.Api.IntegrationTests
@@ -374,7 +376,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         {
             var rates = new Dictionary<string, decimal> { ["EUR"] = 1, ["USD"] = version + 1, ["GBP"] = (version + 1) * 2 + 0.12345678901234567890123456m };
             var published = Published.AddHours(version);
-            return new RateSnapshot(new ExchangeRateTable("ExchangeRate-API", "EUR", published, rates.ToFrozenDictionary()), published);
+            return new RateSnapshot(new StoredExchangeRateTable("ExchangeRate-API", "EUR", published, rates.ToFrozenDictionary()), published);
         }
 
         private WebApplicationFactory<Program> CreateHost(DateTimeOffset now, bool online = false)
@@ -425,7 +427,9 @@ namespace SmartExpenseTracker.Api.IntegrationTests
             public Task<ExchangeRateTable> GetLatestAsync(string baseCurrency, CancellationToken cancellationToken)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                return Task.FromResult(CreateSnapshot(0).Table);
+                var stored = CreateSnapshot(0).Table;
+                return Task.FromResult(new ExchangeRateTable(stored.Provider, stored.BaseCurrency, stored.PublishedAt,
+                    stored.BaseUnitsPerCurrencyUnit, stored.NextUpdateAt));
             }
         }
 

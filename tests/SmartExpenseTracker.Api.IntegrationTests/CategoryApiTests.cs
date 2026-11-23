@@ -12,8 +12,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using SmartExpenseTracker.Api.Contracts;
-using SmartExpenseTracker.Application.Categories;
 using SmartExpenseTracker.Persistence;
+using SmartExpenseTracker.Persistence.Categories;
 using Testcontainers.MsSql;
 
 namespace SmartExpenseTracker.Api.IntegrationTests

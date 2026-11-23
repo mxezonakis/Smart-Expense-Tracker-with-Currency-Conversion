@@ -1,9 +1,9 @@
 using System.Collections.Frozen;
 using FluentAssertions;
 using NUnit.Framework;
-using SmartExpenseTracker.Application.ExchangeRates;
+using SmartExpenseTracker.Persistence.ExchangeRates;
 
-namespace SmartExpenseTracker.Application.UnitTests
+namespace SmartExpenseTracker.Caching.UnitTests
 {
     public sealed class RateSnapshotTests
     {
@@ -114,7 +114,7 @@ namespace SmartExpenseTracker.Application.UnitTests
 
         private static RateSnapshot ValidSnapshot()
         {
-            return new RateSnapshot(new ExchangeRateTable("Test", "EUR", _now,
+            return new RateSnapshot(new StoredExchangeRateTable("Test", "EUR", _now,
                 new Dictionary<string, decimal> { ["EUR"] = 1m, ["USD"] = 0.9m }.ToFrozenDictionary()), _now);
         }
     }

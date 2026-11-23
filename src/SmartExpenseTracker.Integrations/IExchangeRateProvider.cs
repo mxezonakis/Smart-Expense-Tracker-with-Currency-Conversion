@@ -1,4 +1,4 @@
-namespace SmartExpenseTracker.Application.ExchangeRates
+namespace SmartExpenseTracker.Integrations
 {
     public interface IExchangeRateProvider
     {

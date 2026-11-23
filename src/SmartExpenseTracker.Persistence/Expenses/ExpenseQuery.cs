@@ -1,4 +1,4 @@
-namespace SmartExpenseTracker.Application.Expenses
+namespace SmartExpenseTracker.Persistence.Expenses
 {
     public enum ExpenseSort
     {

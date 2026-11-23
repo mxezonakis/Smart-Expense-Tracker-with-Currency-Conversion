@@ -1,5 +1,6 @@
-using SmartExpenseTracker.Application.Categories;
-using SmartExpenseTracker.Application.ExchangeRates;
+using SmartExpenseTracker.Caching;
+using SmartExpenseTracker.Persistence.Categories;
+using SmartExpenseTracker.Persistence.Expenses;
 
 namespace SmartExpenseTracker.Application.Expenses
 {

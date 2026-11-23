@@ -1,6 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Http" />
-    <ProjectReference Include="../SmartExpenseTracker.Application/SmartExpenseTracker.Application.csproj" />
   </ItemGroup>
 </Project>

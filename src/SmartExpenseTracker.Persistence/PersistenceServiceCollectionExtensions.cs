@@ -2,10 +2,10 @@ using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using SmartExpenseTracker.Application.Categories;
-using SmartExpenseTracker.Application.Expenses;
-using SmartExpenseTracker.Application.Reporting;
-using SmartExpenseTracker.Application.ExchangeRates;
+using SmartExpenseTracker.Persistence.Categories;
+using SmartExpenseTracker.Persistence.Expenses;
+using SmartExpenseTracker.Persistence.Reporting;
+using SmartExpenseTracker.Persistence.ExchangeRates;
 
 namespace SmartExpenseTracker.Persistence
 {

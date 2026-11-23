@@ -2,6 +2,7 @@ using FakeItEasy;
 using FluentAssertions;
 using NUnit.Framework;
 using SmartExpenseTracker.Application.Reporting;
+using SmartExpenseTracker.Persistence.Reporting;
 
 namespace SmartExpenseTracker.Application.UnitTests
 {

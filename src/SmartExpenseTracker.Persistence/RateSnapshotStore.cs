@@ -1,7 +1,7 @@
 using System.Collections.Frozen;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
-using SmartExpenseTracker.Application.ExchangeRates;
+using SmartExpenseTracker.Persistence.ExchangeRates;
 
 namespace SmartExpenseTracker.Persistence
 {
@@ -39,7 +39,7 @@ namespace SmartExpenseTracker.Persistence
                     return null;
                 }
 
-                var table = new ExchangeRateTable(row.Provider, row.BaseCurrency, row.PublishedAt,
+                var table = new StoredExchangeRateTable(row.Provider, row.BaseCurrency, row.PublishedAt,
                     rates.ToFrozenDictionary(StringComparer.Ordinal), row.NextUpdateAt);
                 var snapshot = new RateSnapshot(table, row.RetrievedAt);
                 return snapshot.IsValidAt(_clock.GetUtcNow()) ? snapshot : null;

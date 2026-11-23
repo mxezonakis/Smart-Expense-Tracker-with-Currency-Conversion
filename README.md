@@ -10,7 +10,20 @@ An ASP.NET Core API for category and expense CRUD, automatic currency conversion
 - Network access to NuGet and container registries for setup; provider access for live foreign-currency writes. Automated tests use controlled providers.
 - Commands below use PowerShell from the repository root.
 
-## Run locally
+## Run with Docker Compose
+
+From the repository root, use Docker Compose with a Linux engine that supports the SQL Server x86-64 image. On first setup, add a strong SQL password to the local, Git-ignored `.env` file. For a fresh checkout, PowerShell can generate the file:
+
+```powershell
+if (!(Test-Path .env)) { Set-Content .env ("MSSQL_SA_PASSWORD=Aa1!" + [Guid]::NewGuid().ToString("N")) -Encoding ascii }
+docker compose up --build
+```
+
+Compose accepts the SQL Server Developer edition EULA, waits for SQL Server to accept connections, applies the existing EF migrations, and starts the API. Open [Swagger UI](http://localhost:54131/swagger). The database is reachable inside the Compose network. Run `docker compose down` to stop the stack. The named volume preserves the database, so retain the same password across restarts.
+
+The API image includes the published `src/SmartExpenseTracker.Api/appsettings.json` for non-secret defaults. Compose supplies the database connection through `ConnectionStrings__SmartExpenseTracker` and selects Development for local Swagger UI. Keep credentials out of appsettings and source control.
+
+## Run locally with the .NET SDK
 
 ```powershell
 git clone https://github.com/mxezonakis/Smart-Expense-Tracker-with-Currency-Conversion.git

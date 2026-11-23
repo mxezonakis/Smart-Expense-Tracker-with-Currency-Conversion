@@ -58,3 +58,22 @@ jobs:
       - name: Report vulnerable direct and transitive packages
         if: ${{ !cancelled() }}
         run: dotnet package list --project SmartExpenseTracker.slnx --no-restore --vulnerable --include-transitive
+
+  compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Start the Compose stack and verify SQL-backed API and Swagger
+        run: |
+          export MSSQL_SA_PASSWORD="Aa1!$(openssl rand -hex 24)"
+          echo "::add-mask::$MSSQL_SA_PASSWORD"
+          trap 'docker compose logs --no-color --tail 60 migrate api; docker compose down --volumes' EXIT
+          docker compose up --build --detach
+          docker compose ps --all
+          url=http://127.0.0.1:54131
+          curl --retry 20 --retry-connrefused --retry-delay 1 -fsS "$url/api/categories" | jq -e '. == []'
+          curl -fsS "$url/swagger/index.html" | grep -i 'swagger-ui'
+          curl -fsS "$url/openapi/v1.json" | jq -e '.paths["/api/categories"].get != null'

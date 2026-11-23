@@ -10,6 +10,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         [Test]
         public async Task EscapingExceptionPropagatesWithoutRecording()
         {
+            // Arrange
             var statistics = new RequestStatistics();
             statistics.Record(400, TimeSpan.FromMilliseconds(2.5));
             var before = statistics.Snapshot();
@@ -18,16 +19,21 @@ namespace SmartExpenseTracker.Api.IntegrationTests
             var invoke = CreateMiddleware(next, statistics);
             var context = new DefaultHttpContext();
 
+            // Act
             Func<Task> action = () => invoke(context);
             var thrown = await action.Should().ThrowAsync<InvalidOperationException>();
 
+            // Assert
             thrown.Which.Should().BeSameAs(expected);
-            statistics.Snapshot().Should().Be(before);
+            var actual = statistics.Snapshot();
+
+            actual.Should().Be(before);
         }
 
         [Test]
         public async Task CancelledRequestAbortedReturnsNormallyWithoutRecording()
         {
+            // Arrange
             var statistics = new RequestStatistics();
             statistics.Record(400, TimeSpan.FromMilliseconds(2.5));
             var before = statistics.Snapshot();
@@ -41,11 +47,15 @@ namespace SmartExpenseTracker.Api.IntegrationTests
             };
             var invoke = CreateMiddleware(next, statistics);
 
+            // Act
             await invoke(context);
 
+            // Assert
             context.RequestAborted.IsCancellationRequested.Should().BeTrue();
             context.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
-            statistics.Snapshot().Should().Be(before);
+            var actual = statistics.Snapshot();
+
+            actual.Should().Be(before);
         }
 
         private static RequestDelegate CreateMiddleware(RequestDelegate next, RequestStatistics statistics)
@@ -59,25 +69,51 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         [Test]
         public void SnapshotAccumulatesFractionalMillisecondsAndOnlyCountsCompletedErrors()
         {
+            // Arrange
             var statistics = new RequestStatistics();
-            statistics.Snapshot().Should().Be(new RequestStatisticsSnapshot(0, 0, 0, 0));
 
+            // Act
+            var actual = statistics.Snapshot();
+
+            // Assert
+            actual.Should().Be(new RequestStatisticsSnapshot(0, 0, 0, 0));
+
+            // Act
             statistics.Record(200, TimeSpan.FromMilliseconds(1.5));
-            statistics.Snapshot().Should().Be(new RequestStatisticsSnapshot(1, 0, 1.5, 1.5));
+            var actual2 = statistics.Snapshot();
+
+            // Assert
+            actual2.Should().Be(new RequestStatisticsSnapshot(1, 0, 1.5, 1.5));
+
+            // Act
             statistics.Record(400, TimeSpan.FromMilliseconds(0.5));
             statistics.Record(599, TimeSpan.Zero);
             statistics.Record(600, TimeSpan.FromMilliseconds(2));
             statistics.Record(399, TimeSpan.FromMilliseconds(1));
 
+            // Arrange
             var expected = new RequestStatisticsSnapshot(5, 2, 5, 1);
-            statistics.Snapshot().Should().Be(expected);
-            statistics.Snapshot().Should().Be(expected);
+
+            // Act
+            var actual3 = statistics.Snapshot();
+
+            // Assert
+            actual3.Should().Be(expected);
+
+            // Act
+            var actual4 = statistics.Snapshot();
+
+            // Assert
+            actual4.Should().Be(expected);
         }
 
         [Test]
         public void ConcurrentRecordAndSnapshotPreserveAllCompoundUpdates()
         {
+            // Arrange
             var statistics = new RequestStatistics();
+
+            // Assert
             Parallel.For(0, 8, new ParallelOptions { MaxDegreeOfParallelism = 8 }, _ =>
             {
                 for (int i = 0; i < 1000; i++)
@@ -90,7 +126,11 @@ namespace SmartExpenseTracker.Api.IntegrationTests
                 }
             });
 
-            statistics.Snapshot().Should().Be(new RequestStatisticsSnapshot(8000, 8000, 20000, 2.5));
+            // Act
+            var actual = statistics.Snapshot();
+
+            // Assert
+            actual.Should().Be(new RequestStatisticsSnapshot(8000, 8000, 20000, 2.5));
         }
     }
 }

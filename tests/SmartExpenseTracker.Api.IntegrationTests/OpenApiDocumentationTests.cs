@@ -12,9 +12,14 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         [Test]
         public async Task GeneratedDocumentExposesConditionalHeaders()
         {
+            // Arrange
             await using var factory = new WebApplicationFactory<Program>();
             using var client = factory.CreateClient();
+
+            // Act
             using var response = await client.GetAsync("/openapi/v1.json", Token);
+
+            // Assert
             response.EnsureSuccessStatusCode();
             using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(Token));
             var paths = document.RootElement.GetProperty("paths");
@@ -49,12 +54,19 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         [Test]
         public async Task GeneratedDocumentDescribesEveryOperationAndItsActualResponses()
         {
+            // Arrange
             await using var factory = new WebApplicationFactory<Program>();
             using var client = factory.CreateClient();
+
+            // Act
             using var response = await client.GetAsync("/openapi/v1.json", Token);
+
+            // Assert
             response.EnsureSuccessStatusCode();
             using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(Token));
             var paths = document.RootElement.GetProperty("paths");
+
+            // Arrange
             var expected = new (string Path, string Method, string Summary, string[] Codes)[]
             {
                 ("/api/categories", "post", "Create a category.", ["201", "400", "409"]),
@@ -72,6 +84,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
                 ("/api/statistics", "get", "Get request statistics.", ["200"])
             };
 
+            // Assert
             paths.EnumerateObject().Sum(path => path.Value.EnumerateObject().Count()).Should().Be(13);
             foreach (var entry in expected)
             {
@@ -95,9 +108,14 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         [Test]
         public async Task GeneratedDocumentDescribesInputsAndSnapshotSemantics()
         {
+            // Arrange
             await using var factory = new WebApplicationFactory<Program>();
             using var client = factory.CreateClient();
+
+            // Act
             using var response = await client.GetAsync("/openapi/v1.json", Token);
+
+            // Assert
             response.EnsureSuccessStatusCode();
             using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(Token));
             var paths = document.RootElement.GetProperty("paths");
@@ -136,9 +154,14 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         [Test]
         public async Task GeneratedDocumentUsesExamplesInsteadOfPatternsWithoutChangingNumericTypes()
         {
+            // Arrange
             await using var factory = new WebApplicationFactory<Program>();
             using var client = factory.CreateClient();
+
+            // Act
             using var response = await client.GetAsync("/openapi/v1.json", Token);
+
+            // Assert
             response.EnsureSuccessStatusCode();
             using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(Token));
             document.RootElement.GetRawText().Should().NotContain("\"pattern\"");
@@ -179,9 +202,14 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         [Test]
         public async Task GeneratedSchemasDescribeModelsAndPreserveExistingConstraints()
         {
+            // Arrange
             await using var factory = new WebApplicationFactory<Program>();
             using var client = factory.CreateClient();
+
+            // Act
             using var response = await client.GetAsync("/openapi/v1.json", Token);
+
+            // Assert
             response.EnsureSuccessStatusCode();
             using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(Token));
             document.RootElement.GetProperty("info").GetProperty("title").GetString().Should().Be("SmartExpenseTracker");

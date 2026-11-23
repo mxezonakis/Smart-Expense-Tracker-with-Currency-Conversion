@@ -32,6 +32,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         [TestCaseSource(nameof(InvalidHeaders))]
         public async Task InvalidPreconditionsNeverReachPersistenceOrRates(string method, string[]? headers, int status)
         {
+            // Arrange
             var dependencies = new ForbiddenDependencies();
             await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder => builder
                 .ConfigureServices(services =>
@@ -40,6 +41,8 @@ namespace SmartExpenseTracker.Api.IntegrationTests
                     services.AddSingleton<IRateResolver>(dependencies);
                 }));
             using var client = factory.CreateClient();
+
+            // Act
             var context = await factory.Server.SendAsync(context =>
             {
                 context.Request.Method = method;
@@ -57,6 +60,8 @@ namespace SmartExpenseTracker.Api.IntegrationTests
                     context.Request.Body = new MemoryStream(body);
                 }
             }, TestContext.CurrentContext.CancellationToken);
+
+            // Assert
             context.Response.StatusCode.Should().Be(status);
             context.Response.ContentType.Should().StartWith("application/problem+json");
             using var problem = await JsonDocument.ParseAsync(context.Response.Body,

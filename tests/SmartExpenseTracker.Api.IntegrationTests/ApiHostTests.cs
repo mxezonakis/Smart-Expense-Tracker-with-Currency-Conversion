@@ -17,9 +17,14 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         [TestCase("?period=1")]
         public async Task InvalidReportPeriodReturnsValidationProblem(string query)
         {
+            // Arrange
             await using var factory = new WebApplicationFactory<Program>();
             using var client = factory.CreateClient();
+
+            // Act
             using var response = await client.GetAsync($"/api/reports/by-period{query}", TestContext.CurrentContext.CancellationToken);
+
+            // Assert
             response.StatusCode.Should().Be(System.Net.HttpStatusCode.BadRequest);
             response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
             using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.CurrentContext.CancellationToken));
@@ -41,9 +46,14 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         [TestCase("sortBy=99")]
         public async Task InvalidExpenseQueryReturnsValidationProblem(string query)
         {
+            // Arrange
             await using var factory = new WebApplicationFactory<Program>();
             using var client = factory.CreateClient();
+
+            // Act
             using var response = await client.GetAsync($"/api/expenses?{query}", TestContext.CurrentContext.CancellationToken);
+
+            // Assert
             response.StatusCode.Should().Be(System.Net.HttpStatusCode.BadRequest);
             response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
         }
@@ -51,18 +61,73 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         [Test]
         public async Task ExpenseJsonRejectsUnrepresentableFractionalCents()
         {
+            // Arrange
             await using var factory = new WebApplicationFactory<Program>();
             using var client = factory.CreateClient();
             using var body = new StringContent(
                 """{"amount":1.00000000000000000000000000001,"currency":"EUR","categoryId":1,"date":"2026-01-01"}""",
                 System.Text.Encoding.UTF8, "application/json");
+
+            // Act
             using var response = await client.PostAsync("/api/expenses", body, TestContext.CurrentContext.CancellationToken);
+
+            // Assert
             response.StatusCode.Should().Be(System.Net.HttpStatusCode.BadRequest);
+        }
+
+        [TestCase("\"10\"")]
+        [TestCase("null")]
+        [TestCase("1e100")]
+        public async Task ExpenseAmountRejectsNonNumericAndOutOfRangeJson(string amount)
+        {
+            // Arrange
+            await using var factory = new WebApplicationFactory<Program>();
+            using var client = factory.CreateClient();
+            using var body = new StringContent(
+                $$"""{"amount":{{amount}},"currency":"EUR","categoryId":1,"date":"2026-01-01"}""",
+                System.Text.Encoding.UTF8, "application/json");
+
+            // Act
+            using var response = await client.PostAsync("/api/expenses", body, TestContext.CurrentContext.CancellationToken);
+
+            // Assert
+            response.StatusCode.Should().Be(System.Net.HttpStatusCode.BadRequest);
+            response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
+            using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.CurrentContext.CancellationToken));
+            problem.RootElement.GetProperty("status").GetInt32().Should().Be(400);
+            problem.RootElement.GetProperty("errors").TryGetProperty("$.amount", out _).Should().BeTrue();
+        }
+
+        [TestCase("amount")]
+        [TestCase("currency")]
+        [TestCase("categoryId")]
+        [TestCase("date")]
+        public async Task ExpenseBodyRequiresEveryMandatoryProperty(string property)
+        {
+            // Arrange
+            await using var factory = new WebApplicationFactory<Program>();
+            using var client = factory.CreateClient();
+            var json = System.Text.Json.Nodes.JsonNode.Parse(
+                """{"amount":10,"currency":"EUR","categoryId":1,"date":"2026-01-01"}""")!.AsObject();
+            json.Remove(property);
+            using var body = new StringContent(json.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
+
+            // Act
+            using var response = await client.PostAsync("/api/expenses", body, TestContext.CurrentContext.CancellationToken);
+
+            // Assert
+            response.StatusCode.Should().Be(System.Net.HttpStatusCode.BadRequest);
+            response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
+            using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.CurrentContext.CancellationToken));
+            problem.RootElement.GetProperty("status").GetInt32().Should().Be(400);
+            problem.RootElement.GetProperty("errors").GetProperty("$").EnumerateArray()
+                .Select(error => error.GetString()).Should().Contain(error => error!.Contains(property, StringComparison.Ordinal));
         }
 
         [Test]
         public void BlankDocumentationTitleFailsDuringHostStartup()
         {
+            // Arrange
             using var factory = new WebApplicationFactory<Program>();
             using var invalidHost = factory.WithWebHostBuilder(builder =>
                 builder.ConfigureAppConfiguration((_, configuration) =>
@@ -71,8 +136,10 @@ namespace SmartExpenseTracker.Api.IntegrationTests
                         ["ApiDocumentation:Title"] = " "
                     })));
 
+            // Act
             Action startHost = () => _ = invalidHost.Server;
 
+            // Assert
             startHost.Should().Throw<OptionsValidationException>()
                 .Which.Failures.Should().Contain("An API title is required.");
         }
@@ -80,11 +147,14 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         [Test]
         public async Task OpenApiDocumentIdentifiesTheRunningApi()
         {
+            // Arrange
             await using var factory = new WebApplicationFactory<Program>();
             using var client = factory.CreateClient();
 
+            // Act
             using var response = await client.GetAsync("/openapi/v1.json", TestContext.CurrentContext.CancellationToken);
 
+            // Assert
             response.EnsureSuccessStatusCode();
             using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.CurrentContext.CancellationToken));
             var request = document.RootElement.GetProperty("components").GetProperty("schemas").GetProperty("CategoryRequest");

@@ -14,19 +14,34 @@ namespace SmartExpenseTracker.Api
             }
 
             var values = headers.IfMatch;
-            if (values.Count == 1 && values[0] is { Length: <= 128 } raw)
+            if (values.Count != 1 || values[0] is not { Length: <= 128 } raw)
             {
-                var tag = raw.Trim(' ', '\t');
-                Span<byte> version = stackalloc byte[8];
-                if (tag.Length == 14 && tag[0] == '"' && tag[^1] == '"' &&
-                    Convert.TryFromBase64Chars(tag.AsSpan(1, 12), version, out var written) && written == 8 &&
-                    Convert.ToBase64String(version) == tag[1..^1])
-                {
-                    return version.ToArray();
-                }
+                throw InvalidTag();
             }
 
-            throw new ExpenseValidationException("If-Match", "Supply exactly one strong ETag returned by this resource.");
+            var tag = raw.Trim(' ', '\t');
+            if (tag.Length != 14 || tag[0] != '"' || tag[^1] != '"')
+            {
+                throw InvalidTag();
+            }
+
+            var version = new byte[8];
+            if (!Convert.TryFromBase64Chars(tag.AsSpan(1, 12), version, out var written) || written != version.Length)
+            {
+                throw InvalidTag();
+            }
+
+            if (Format(version) != tag)
+            {
+                throw InvalidTag();
+            }
+
+            return version;
+        }
+
+        private static ExpenseValidationException InvalidTag()
+        {
+            return new ExpenseValidationException("If-Match", "Supply exactly one strong ETag returned by this resource.");
         }
     }
 

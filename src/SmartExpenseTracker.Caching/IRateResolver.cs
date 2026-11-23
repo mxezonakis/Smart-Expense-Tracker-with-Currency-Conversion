@@ -22,13 +22,17 @@ namespace SmartExpenseTracker.Caching
                 return new ResolvedRate(applied, Snapshot.Table.PublishedAt, IsFallback);
             }
 
-            if (Snapshot.FallbackRates.TryGetValue(currency, out var prior) && Clock.GetUtcNow() - prior.PublishedAt < MaximumAge &&
-                ConversionSnapshot.TryGetAppliedRate(prior.Rate, out applied))
+            if (!Snapshot.FallbackRates.TryGetValue(currency, out var prior) || Clock.GetUtcNow() - prior.PublishedAt >= MaximumAge)
             {
-                return new ResolvedRate(applied, prior.PublishedAt, true);
+                throw new RateUnavailableException();
             }
 
-            throw new RateUnavailableException();
+            if (!ConversionSnapshot.TryGetAppliedRate(prior.Rate, out applied))
+            {
+                throw new RateUnavailableException();
+            }
+
+            return new ResolvedRate(applied, prior.PublishedAt, true);
         }
     }
 

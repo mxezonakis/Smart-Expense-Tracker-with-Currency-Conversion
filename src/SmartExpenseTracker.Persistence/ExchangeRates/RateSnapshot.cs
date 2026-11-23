@@ -81,9 +81,12 @@ namespace SmartExpenseTracker.Persistence.ExchangeRates
                 return this;
             }
 
-            return (Table.PublishedAt, RetrievedAt).CompareTo((other.Table.PublishedAt, other.RetrievedAt)) >= 0
-                ? RetainUsableRatesFrom(other)
-                : other.RetainUsableRatesFrom(this);
+            if (IsNewer(other.Table.PublishedAt, other.RetrievedAt, Table.PublishedAt, RetrievedAt))
+            {
+                return other.RetainUsableRatesFrom(this);
+            }
+
+            return RetainUsableRatesFrom(other);
         }
 
         private RateSnapshot RetainUsableRatesFrom(RateSnapshot previous)
@@ -91,27 +94,48 @@ namespace SmartExpenseTracker.Persistence.ExchangeRates
             Dictionary<string, StoredCurrencyRate>? merged = null;
             foreach (var (currency, current) in Table.BaseUnitsPerCurrencyUnit)
             {
-                if (ConversionSnapshot.TryGetAppliedRate(current, out _) ||
-                    !previous.Table.BaseUnitsPerCurrencyUnit.TryGetValue(currency, out var prior))
+                if (ConversionSnapshot.TryGetAppliedRate(current, out _))
                 {
                     continue;
                 }
 
-                var quote = ConversionSnapshot.TryGetAppliedRate(prior, out _)
-                    ? new StoredCurrencyRate(prior, previous.Table.PublishedAt, previous.RetrievedAt)
-                    : previous.FallbackRates.GetValueOrDefault(currency);
-                if (quote == null || quote.PublishedAt > Table.PublishedAt ||
-                    (FallbackRates.TryGetValue(currency, out var retained) &&
-                    (retained.PublishedAt, retained.RetrievedAt).CompareTo((quote.PublishedAt, quote.RetrievedAt)) >= 0))
+                var candidate = previous.FindUsableQuote(currency);
+                if (candidate == null || candidate.PublishedAt > Table.PublishedAt)
+                {
+                    continue;
+                }
+
+                if (FallbackRates.TryGetValue(currency, out var retained) &&
+                    !IsNewer(candidate.PublishedAt, candidate.RetrievedAt, retained.PublishedAt, retained.RetrievedAt))
                 {
                     continue;
                 }
 
                 merged ??= new Dictionary<string, StoredCurrencyRate>(FallbackRates, StringComparer.Ordinal);
-                merged[currency] = quote;
+                merged[currency] = candidate;
             }
 
             return merged == null ? this : this with { FallbackRates = merged.ToFrozenDictionary(StringComparer.Ordinal) };
+        }
+
+        private StoredCurrencyRate? FindUsableQuote(string currency)
+        {
+            if (!Table.BaseUnitsPerCurrencyUnit.TryGetValue(currency, out var publishedRate))
+            {
+                return null;
+            }
+
+            if (ConversionSnapshot.TryGetAppliedRate(publishedRate, out _))
+            {
+                return new StoredCurrencyRate(publishedRate, Table.PublishedAt, RetrievedAt);
+            }
+
+            return FallbackRates.GetValueOrDefault(currency);
+        }
+
+        private static bool IsNewer(DateTimeOffset published, DateTimeOffset retrieved, DateTimeOffset otherPublished, DateTimeOffset otherRetrieved)
+        {
+            return published == otherPublished ? retrieved > otherRetrieved : published > otherPublished;
         }
 
         private static bool IsCurrencyCode(string? code)

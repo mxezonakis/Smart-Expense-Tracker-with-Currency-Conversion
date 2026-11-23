@@ -41,7 +41,7 @@ namespace SmartExpenseTracker.Caching
                 var now = _clock.GetUtcNow();
                 var cached = _cache.Get<RateSnapshot>(_key);
                 cancellationToken.ThrowIfCancellationRequested();
-                if (cached != null && Fresh(cached, now))
+                if (cached != null && IsFresh(cached, now))
                 {
                     return ForCaller(new ResolvedRates(cached, false));
                 }
@@ -56,7 +56,7 @@ namespace SmartExpenseTracker.Caching
 
             var resolved = await flight.Value.WaitAsync(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            if (!Eligible(resolved.Snapshot, _clock.GetUtcNow()))
+            if (!IsWithinAgeLimit(resolved.Snapshot, _clock.GetUtcNow()))
             {
                 throw new RateUnavailableException();
             }
@@ -80,33 +80,10 @@ namespace SmartExpenseTracker.Caching
                 await using var scope = _scopes.CreateAsyncScope();
                 var store = scope.ServiceProvider.GetRequiredService<IRateSnapshotStore>();
                 previous = _cache.Get<RateSnapshot>(_key);
-                bool recovering;
-                lock (_gate)
-                {
-                    recovering = _retryAt != default;
-                }
-
-                if (recovering || previous == null || !Eligible(previous, _clock.GetUtcNow()))
-                {
-                    try
-                    {
-                        using var readBudget = new CancellationTokenSource(_options.RefreshTimeout / 4, _clock);
-                        using var read = CancellationTokenSource.CreateLinkedTokenSource(token, readBudget.Token);
-                        var stored = await store.ReadAsync(_key.Provider, _key.Currency, read.Token);
-                        if (stored != null && Valid(stored, _clock.GetUtcNow()))
-                        {
-                            previous = stored.MergeWith(previous);
-                            Remember(previous);
-                        }
-                    }
-                    catch (Exception ex) when (IsRecoverableStoreFailure(ex))
-                    {
-                        _logger.LogWarning("Durable rate read failed ({FailureType}).", ex.GetType().Name);
-                    }
-                }
+                previous = await RecoverSnapshotAsync(store, previous, token);
 
                 var now = _clock.GetUtcNow();
-                if (previous != null && Fresh(previous, now))
+                if (previous != null && IsFresh(previous, now))
                 {
                     ClearRetry();
                     return new ResolvedRates(previous, false);
@@ -115,42 +92,9 @@ namespace SmartExpenseTracker.Caching
                 token.ThrowIfCancellationRequested();
 
                 var provider = scope.ServiceProvider.GetRequiredService<IExchangeRateProvider>();
-                var table = await provider.GetLatestAsync(_key.Currency, token);
-                token.ThrowIfCancellationRequested();
-                if (table is null)
-                {
-                    throw new InvalidDataException("Unusable exchange-rate table.");
-                }
-
-                var storedTable = new StoredExchangeRateTable(table.Provider, table.BaseCurrency, table.PublishedAt,
-                    table.BaseUnitsPerCurrencyUnit, table.NextUpdateAt);
-                var candidate = new RateSnapshot(storedTable, _clock.GetUtcNow());
-                if (!Valid(candidate, candidate.RetrievedAt) || (previous != null && table.PublishedAt < previous.Table.PublishedAt))
-                {
-                    throw new InvalidDataException("Unusable exchange-rate table.");
-                }
-
-                candidate = candidate.MergeWith(previous);
-                try
-                {
-                    using var saveBudget = new CancellationTokenSource(_options.RefreshTimeout / 4, _clock);
-                    using var save = CancellationTokenSource.CreateLinkedTokenSource(token, saveBudget.Token);
-                    var winner = await store.SaveLatestAsync(candidate, save.Token);
-                    if (Valid(winner, _clock.GetUtcNow()))
-                    {
-                        candidate = winner;
-                    }
-                    else
-                    {
-                        _logger.LogWarning("Durable rate store returned an unusable table.");
-                    }
-                }
-                catch (Exception ex) when (IsRecoverableStoreFailure(ex))
-                {
-                    _logger.LogWarning("Durable rate write failed ({FailureType}).", ex.GetType().Name);
-                }
-
-                if (!Valid(candidate, _clock.GetUtcNow()))
+                var candidate = await FetchSnapshotAsync(provider, previous, token);
+                candidate = await SaveSnapshotAsync(store, candidate, token);
+                if (!IsUsableSnapshot(candidate, _clock.GetUtcNow()))
                 {
                     throw new InvalidDataException("Unusable stored exchange-rate table.");
                 }
@@ -180,6 +124,81 @@ namespace SmartExpenseTracker.Caching
             }
         }
 
+        private async Task<RateSnapshot?> RecoverSnapshotAsync(IRateSnapshotStore store, RateSnapshot? cached, CancellationToken token)
+        {
+            bool retryPending;
+            lock (_gate)
+            {
+                retryPending = _retryAt != default;
+            }
+
+            if (!retryPending && cached != null && IsWithinAgeLimit(cached, _clock.GetUtcNow()))
+            {
+                return cached;
+            }
+
+            try
+            {
+                using var readBudget = new CancellationTokenSource(_options.RefreshTimeout / 4, _clock);
+                using var read = CancellationTokenSource.CreateLinkedTokenSource(token, readBudget.Token);
+                var stored = await store.ReadAsync(_key.Provider, _key.Currency, read.Token);
+                if (stored != null && IsUsableSnapshot(stored, _clock.GetUtcNow()))
+                {
+                    var recovered = stored.MergeWith(cached);
+                    Remember(recovered);
+                    return recovered;
+                }
+            }
+            catch (Exception ex) when (IsRecoverableStoreFailure(ex))
+            {
+                _logger.LogWarning("Durable rate read failed ({FailureType}).", ex.GetType().Name);
+            }
+
+            return cached;
+        }
+
+        private async Task<RateSnapshot> FetchSnapshotAsync(IExchangeRateProvider provider, RateSnapshot? previous, CancellationToken token)
+        {
+            var table = await provider.GetLatestAsync(_key.Currency, token);
+            token.ThrowIfCancellationRequested();
+            if (table is null)
+            {
+                throw new InvalidDataException("Unusable exchange-rate table.");
+            }
+
+            var storedTable = new StoredExchangeRateTable(table.Provider, table.BaseCurrency, table.PublishedAt,
+                table.BaseUnitsPerCurrencyUnit, table.NextUpdateAt);
+            var candidate = new RateSnapshot(storedTable, _clock.GetUtcNow());
+            if (!IsUsableSnapshot(candidate, candidate.RetrievedAt) || (previous != null && table.PublishedAt < previous.Table.PublishedAt))
+            {
+                throw new InvalidDataException("Unusable exchange-rate table.");
+            }
+
+            return candidate.MergeWith(previous);
+        }
+
+        private async Task<RateSnapshot> SaveSnapshotAsync(IRateSnapshotStore store, RateSnapshot candidate, CancellationToken token)
+        {
+            try
+            {
+                using var saveBudget = new CancellationTokenSource(_options.RefreshTimeout / 4, _clock);
+                using var save = CancellationTokenSource.CreateLinkedTokenSource(token, saveBudget.Token);
+                var winner = await store.SaveLatestAsync(candidate, save.Token);
+                if (IsUsableSnapshot(winner, _clock.GetUtcNow()))
+                {
+                    return winner;
+                }
+
+                _logger.LogWarning("Durable rate store returned an unusable table.");
+            }
+            catch (Exception ex) when (IsRecoverableStoreFailure(ex))
+            {
+                _logger.LogWarning("Durable rate write failed ({FailureType}).", ex.GetType().Name);
+            }
+
+            return candidate;
+        }
+
         private static bool IsRecoverableStoreFailure(Exception exception)
         {
             // The SQL Server execution strategy wraps transient query failures.
@@ -197,7 +216,7 @@ namespace SmartExpenseTracker.Caching
 
         private ResolvedRates Fallback(RateSnapshot? snapshot, Exception? cause = null)
         {
-            if (snapshot == null || !Eligible(snapshot, _clock.GetUtcNow()))
+            if (snapshot == null || !IsWithinAgeLimit(snapshot, _clock.GetUtcNow()))
             {
                 throw new RateUnavailableException(cause);
             }
@@ -205,24 +224,43 @@ namespace SmartExpenseTracker.Caching
             return new ResolvedRates(snapshot, true);
         }
 
-        private bool Fresh(RateSnapshot snapshot, DateTimeOffset now)
+        private bool IsFresh(RateSnapshot snapshot, DateTimeOffset now)
         {
-            var refreshAt = snapshot.Table.NextUpdateAt is { } next && next > snapshot.RetrievedAt &&
-                next > snapshot.Table.PublishedAt && next - snapshot.Table.PublishedAt <= TimeSpan.FromHours(30)
-                ? next : snapshot.RetrievedAt + _options.RefreshInterval;
-            return Eligible(snapshot, now) && now < refreshAt;
+            return IsWithinAgeLimit(snapshot, now) && now < RefreshDueAt(snapshot);
         }
 
-        private bool Eligible(RateSnapshot snapshot, DateTimeOffset now)
+        private DateTimeOffset RefreshDueAt(RateSnapshot snapshot)
+        {
+            var table = snapshot.Table;
+            if (table.NextUpdateAt is not { } next || next <= snapshot.RetrievedAt)
+            {
+                return snapshot.RetrievedAt + _options.RefreshInterval;
+            }
+
+            var publicationInterval = next - table.PublishedAt;
+            if (publicationInterval <= TimeSpan.Zero || publicationInterval > TimeSpan.FromHours(30))
+            {
+                return snapshot.RetrievedAt + _options.RefreshInterval;
+            }
+
+            return next;
+        }
+
+        private bool IsWithinAgeLimit(RateSnapshot snapshot, DateTimeOffset now)
         {
             return now - snapshot.Table.PublishedAt < _options.MaximumAge &&
                 snapshot.Table.PublishedAt - now <= TimeSpan.FromMinutes(2);
         }
 
-        private bool Valid(RateSnapshot snapshot, DateTimeOffset now)
+        private bool IsUsableSnapshot(RateSnapshot snapshot, DateTimeOffset now)
         {
             var table = snapshot.Table;
-            return snapshot.IsValidAt(now) && table.Provider == _key.Provider && table.BaseCurrency == _key.Currency && Eligible(snapshot, now);
+            if (!snapshot.IsValidAt(now))
+            {
+                return false;
+            }
+
+            return table.Provider == _key.Provider && table.BaseCurrency == _key.Currency && IsWithinAgeLimit(snapshot, now);
         }
 
         private void Remember(RateSnapshot snapshot)

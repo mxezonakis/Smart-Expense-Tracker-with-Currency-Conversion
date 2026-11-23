@@ -128,18 +128,10 @@ namespace SmartExpenseTracker.Application.Expenses
                 throw new RateUnavailableException();
             }
 
-            if (!table.BaseUnitsPerCurrencyUnit.TryGetValue(currency, out var rate))
-            {
+            var quote = resolved.ForCurrency(currency) ??
                 throw new ExpenseValidationException("currency", "Currency is unsupported by the exchange-rate table.");
-            }
-
-            if (!ConversionSnapshot.TryGetAppliedRate(rate, out var applied))
-            {
-                throw new RateUnavailableException();
-            }
-
-            return new ConversionSnapshot(table.BaseCurrency, applied, decimal.Round(amount * applied, 2, MidpointRounding.ToEven),
-                table.Provider, table.PublishedAt.ToUniversalTime(), resolved.IsFallback);
+            return new ConversionSnapshot(table.BaseCurrency, quote.AppliedRate, decimal.Round(amount * quote.AppliedRate, 2, MidpointRounding.ToEven),
+                table.Provider, quote.PublishedAt.ToUniversalTime(), quote.IsFallback);
         }
     }
 }

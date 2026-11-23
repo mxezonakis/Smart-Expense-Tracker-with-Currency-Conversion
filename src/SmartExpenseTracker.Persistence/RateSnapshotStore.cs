@@ -33,7 +33,32 @@ namespace SmartExpenseTracker.Persistence
 
             try
             {
-                var rates = JsonSerializer.Deserialize<Dictionary<string, decimal>>(row.Rates, _jsonOptions);
+                using var json = JsonDocument.Parse(row.Rates, new JsonDocumentOptions { AllowDuplicateProperties = false });
+                var root = json.RootElement;
+                if (root.ValueKind != JsonValueKind.Object)
+                {
+                    return null;
+                }
+
+                // Legacy rows contain only the currency-to-rate dictionary.
+                var fallbacks = FrozenDictionary<string, StoredCurrencyRate>.Empty;
+                IReadOnlyDictionary<string, decimal>? rates;
+                if (root.TryGetProperty("Rates", out _))
+                {
+                    var payload = root.Deserialize<SnapshotPayload>(_jsonOptions);
+                    if (payload?.Fallbacks == null || payload.Rates == null)
+                    {
+                        return null;
+                    }
+
+                    fallbacks = payload.Fallbacks.ToFrozenDictionary(StringComparer.Ordinal);
+                    rates = payload.Rates;
+                }
+                else
+                {
+                    rates = root.Deserialize<Dictionary<string, decimal>>(_jsonOptions);
+                }
+
                 if (rates == null)
                 {
                     return null;
@@ -41,7 +66,7 @@ namespace SmartExpenseTracker.Persistence
 
                 var table = new StoredExchangeRateTable(row.Provider, row.BaseCurrency, row.PublishedAt,
                     rates.ToFrozenDictionary(StringComparer.Ordinal), row.NextUpdateAt);
-                var snapshot = new RateSnapshot(table, row.RetrievedAt);
+                var snapshot = new RateSnapshot(table, row.RetrievedAt) { FallbackRates = fallbacks };
                 return snapshot.IsValidAt(_clock.GetUtcNow()) ? snapshot : null;
             }
             catch (JsonException)
@@ -58,20 +83,23 @@ namespace SmartExpenseTracker.Persistence
             }
 
             var table = snapshot.Table;
-            var rates = JsonSerializer.Serialize(table.BaseUnitsPerCurrencyUnit);
             await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
             // Hold the row (or missing-key range) through validation and replacement.
             var row = await _context.Set<RateSnapshotRow>().FromSqlInterpolated(
                 $"SELECT * FROM [RateSnapshots] WITH (UPDLOCK, HOLDLOCK) WHERE Provider = {table.Provider} AND BaseCurrency = {table.BaseCurrency}")
                 .AsNoTracking().SingleOrDefaultAsync(cancellationToken);
             var existing = Decode(row, table.Provider, table.BaseCurrency);
-            if (existing != null && (existing.Table.PublishedAt > table.PublishedAt ||
-                (existing.Table.PublishedAt == table.PublishedAt && existing.RetrievedAt >= snapshot.RetrievedAt)))
+            snapshot = existing?.MergeWith(snapshot) ?? snapshot;
+            if (ReferenceEquals(snapshot, existing))
             {
                 await transaction.CommitAsync(cancellationToken);
-                return existing;
+                return snapshot;
             }
 
+            table = snapshot.Table;
+            var rates = snapshot.FallbackRates.Count == 0
+                ? JsonSerializer.Serialize(table.BaseUnitsPerCurrencyUnit)
+                : JsonSerializer.Serialize(new SnapshotPayload(table.BaseUnitsPerCurrencyUnit, snapshot.FallbackRates));
             if (row == null)
             {
                 await _context.Database.ExecuteSqlInterpolatedAsync($"""
@@ -91,5 +119,7 @@ namespace SmartExpenseTracker.Persistence
             await transaction.CommitAsync(cancellationToken);
             return snapshot;
         }
+
+        private sealed record SnapshotPayload(IReadOnlyDictionary<string, decimal> Rates, IReadOnlyDictionary<string, StoredCurrencyRate> Fallbacks);
     }
 }

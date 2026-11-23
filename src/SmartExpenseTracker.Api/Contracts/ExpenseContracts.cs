@@ -67,7 +67,7 @@ namespace SmartExpenseTracker.Api.Contracts
     /// <param name="ConvertedAmount">Original amount multiplied by the stored applied rate, rounded once to cents using half-to-even rounding. May be zero for a small positive expense.</param>
     /// <param name="Provider">The exchange-rate provider name, or null for base-to-base conversion.</param>
     /// <param name="PublishedAt">The original provider publication timestamp in UTC, or null for base-to-base conversion. This is not the expense date or retrieval time.</param>
-    /// <param name="IsFallback">True when this conversion used an eligible last-known rate after refresh failure. False for base-to-base conversion.</param>
+    /// <param name="IsFallback">True when the expense uses a last-known rate after refresh failure or when the latest rate for its currency cannot fit the expense precision. Base-to-base conversions use false.</param>
     public sealed record ExpenseResponse(int Id, decimal Amount, string Currency, int CategoryId, DateOnly Date,
         string? Description, string BaseCurrency, decimal AppliedRate, decimal ConvertedAmount, string? Provider,
         DateTimeOffset? PublishedAt, bool IsFallback)

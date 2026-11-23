@@ -43,12 +43,12 @@ namespace SmartExpenseTracker.Caching
                 cancellationToken.ThrowIfCancellationRequested();
                 if (cached != null && Fresh(cached, now))
                 {
-                    return new ResolvedRates(cached, false);
+                    return ForCaller(new ResolvedRates(cached, false));
                 }
 
                 if (now < _retryAt)
                 {
-                    return Fallback(cached);
+                    return ForCaller(Fallback(cached));
                 }
 
                 flight = _flight ??= new Lazy<Task<ResolvedRates>>(RefreshAsync);
@@ -61,7 +61,13 @@ namespace SmartExpenseTracker.Caching
                 throw new RateUnavailableException();
             }
 
-            return resolved;
+            return ForCaller(resolved);
+        }
+
+        private ResolvedRates ForCaller(ResolvedRates rates)
+        {
+            return rates.Snapshot.FallbackRates.Count == 0 ? rates :
+                rates with { Clock = _clock, MaximumAge = _options.MaximumAge };
         }
 
         private async Task<ResolvedRates> RefreshAsync()
@@ -87,12 +93,10 @@ namespace SmartExpenseTracker.Caching
                         using var readBudget = new CancellationTokenSource(_options.RefreshTimeout / 4, _clock);
                         using var read = CancellationTokenSource.CreateLinkedTokenSource(token, readBudget.Token);
                         var stored = await store.ReadAsync(_key.Provider, _key.Currency, read.Token);
-                        if (stored != null && Valid(stored, _clock.GetUtcNow()) &&
-                            (previous == null || stored.Table.PublishedAt > previous.Table.PublishedAt ||
-                            (stored.Table.PublishedAt == previous.Table.PublishedAt && stored.RetrievedAt >= previous.RetrievedAt)))
+                        if (stored != null && Valid(stored, _clock.GetUtcNow()))
                         {
-                            previous = stored;
-                            Remember(stored);
+                            previous = stored.MergeWith(previous);
+                            Remember(previous);
                         }
                     }
                     catch (Exception ex) when (IsRecoverableStoreFailure(ex))
@@ -126,6 +130,7 @@ namespace SmartExpenseTracker.Caching
                     throw new InvalidDataException("Unusable exchange-rate table.");
                 }
 
+                candidate = candidate.MergeWith(previous);
                 try
                 {
                     using var saveBudget = new CancellationTokenSource(_options.RefreshTimeout / 4, _clock);

@@ -1,4 +1,6 @@
 using System.Collections.Frozen;
+using System.Net;
+using System.Net.Http.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.SqlClient;
@@ -6,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
+using SmartExpenseTracker.Api.Contracts;
 using SmartExpenseTracker.Caching;
 using SmartExpenseTracker.Integrations;
 using SmartExpenseTracker.Persistence;
@@ -83,7 +86,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         }
 
         [TestCase("{}", 0)]
-        [TestCase("{\"EUR\":1,\"USD\":0.0000000000004}", 0)]
+        [TestCase("{\"EUR\":1,\"USD\":0}", 0)]
         [TestCase("{\"EUR\":1,\"USD\":2}", 72)]
         [TestCase("{\"EUR\":1,\"USD\":2,\"USD\":3}", 0)]
         public async Task LiveProviderRepairsInvalidRowForOfflineRestart(string rates, int futureHours)
@@ -149,6 +152,70 @@ namespace SmartExpenseTracker.Api.IntegrationTests
             var actual2 = await store.ReadAsync("ExchangeRate-API", "EUR", Token);
 
             Assert.That(actual2, Is.Null);
+        }
+
+        [TestCase(true)]
+        [TestCase(false)]
+        public async Task MixedPublicationPreservesExpenseProvenanceAcrossRestartsAndWriteOrder(bool olderFirst)
+        {
+            // Arrange
+            var older = CreateSnapshot(0);
+            var latest = CreateSnapshot(47);
+            latest = latest with
+            {
+                Table = latest.Table with
+                {
+                    BaseUnitsPerCurrencyUnit = new Dictionary<string, decimal>
+                    {
+                        ["EUR"] = 1m,
+                        ["USD"] = 1000000m,
+                        ["VND"] = 0.5m
+                    }.ToFrozenDictionary()
+                }
+            };
+            await using (var writer = CreateHost(latest.RetrievedAt))
+            {
+                await using var scope = writer.Services.CreateAsyncScope();
+                var store = scope.ServiceProvider.GetRequiredService<IRateSnapshotStore>();
+                await store.SaveLatestAsync(olderFirst ? older : latest, Token);
+                await store.SaveLatestAsync(olderFirst ? latest : older, Token);
+            }
+
+            int categoryId;
+            ExpenseRequest Input(string currency, int category) => new ExpenseRequest(10m, currency, category, new DateOnly(2030, 1, 2), null);
+
+            // Act: the host has no memory cache and its provider is offline.
+            await using (var restarted = CreateHost(latest.RetrievedAt))
+            {
+                using var client = restarted.CreateClient();
+                using var category = await client.PostAsJsonAsync("/api/categories", new { name = "Travel" }, Token);
+                category.EnsureSuccessStatusCode();
+                categoryId = (await category.Content.ReadFromJsonAsync<CategoryResponse>(Token))!.Id;
+                using var usd = await client.PostAsJsonAsync("/api/expenses", Input("USD", categoryId), Token);
+                usd.EnsureSuccessStatusCode();
+                var expense = (await usd.Content.ReadFromJsonAsync<ExpenseResponse>(Token))!;
+
+                // Assert
+                Assert.That(expense.IsFallback, Is.True);
+                Assert.That(expense.PublishedAt, Is.EqualTo(older.Table.PublishedAt));
+                Assert.That(expense.AppliedRate, Is.EqualTo(1m));
+                Assert.That(expense.ConvertedAmount, Is.EqualTo(10m));
+            }
+
+            // Act: only the retained USD publication reaches the 48-hour cutoff.
+            await using var atExpiry = CreateHost(Published.AddHours(48));
+            using var next = atExpiry.CreateClient();
+            using var expired = await next.PostAsJsonAsync("/api/expenses", Input("USD", categoryId), Token);
+            using var vnd = await next.PostAsJsonAsync("/api/expenses", Input("VND", categoryId), Token);
+
+            // Assert
+            Assert.That(expired.StatusCode, Is.EqualTo(HttpStatusCode.ServiceUnavailable));
+            Assert.That(expired.Content.Headers.ContentType?.MediaType, Is.EqualTo("application/problem+json"));
+            vnd.EnsureSuccessStatusCode();
+            var fresh = (await vnd.Content.ReadFromJsonAsync<ExpenseResponse>(Token))!;
+            Assert.That(fresh.IsFallback, Is.False);
+            Assert.That(fresh.PublishedAt, Is.EqualTo(latest.Table.PublishedAt));
+            Assert.That(fresh.ConvertedAmount, Is.EqualTo(5m));
         }
 
         [Test]

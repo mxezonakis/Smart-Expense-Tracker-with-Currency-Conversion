@@ -17,20 +17,22 @@ Use exactly five production projects under src and four test projects under test
 | Project | Direct project references (SmartExpenseTracker prefix omitted) |
 |---|---|
 | SmartExpenseTracker.Api | Application, Persistence, Integrations, Caching |
-| SmartExpenseTracker.Application | None |
-| SmartExpenseTracker.Persistence | Application |
-| SmartExpenseTracker.Integrations | Application |
-| SmartExpenseTracker.Caching | Application |
-| SmartExpenseTracker.Application.UnitTests | Application |
-| SmartExpenseTracker.Integrations.UnitTests | Integrations, Application |
-| SmartExpenseTracker.Caching.UnitTests | Caching, Application |
-| SmartExpenseTracker.Api.IntegrationTests | Api, Persistence, Application |
+| SmartExpenseTracker.Application | Caching, Persistence |
+| SmartExpenseTracker.Persistence | None |
+| SmartExpenseTracker.Integrations | None |
+| SmartExpenseTracker.Caching | Integrations, Persistence |
+| SmartExpenseTracker.Application.UnitTests | Application, Caching, Persistence |
+| SmartExpenseTracker.Integrations.UnitTests | Integrations |
+| SmartExpenseTracker.Caching.UnitTests | Caching, Integrations, Persistence |
+| SmartExpenseTracker.Api.IntegrationTests | Api, Caching, Integrations, Persistence |
+
+References flow from higher layers to lower layers. Every interface belongs to the project containing its production implementation. Persistence and Integrations are independent leaf projects; neither references Application, Caching or the other leaf. Api may reference all production projects to compose DI.
 
 ## Implementation rules
 
-Api is the DI composition root. Keep controllers thin. Api owns HTTP contracts, validation, ProblemDetails, OpenAPI, request statistics middleware and its read-only endpoint. Application owns business workflows, models, expense/category rules, conversion policies, reporting orchestration and the interfaces for provider access, cached rate resolution and persistence.
+Api is the DI composition root. Keep controllers thin. Api owns HTTP contracts, validation, ProblemDetails, OpenAPI, request statistics middleware and its read-only endpoint. Application owns business workflows, application inputs, expense/category rules, conversion policies and reporting orchestration. It consumes the interfaces exposed by Caching and Persistence.
 
-Persistence owns EF Core, SQL Server, DbContext, configurations, migrations, relational queries, database-backed reports and durable last-known rate storage. Integrations owns the typed HttpClient, provider contracts, response validation, normalization, timeouts, cancellation and HTTP errors. Caching owns IMemoryCache, freshness, single-flight refresh, stale fallback orchestration and thread-safe shared state. Inject the provider and durable store through Application interfaces. Only Api wires their implementations together.
+Persistence owns all store interfaces, their records and failure types, EF Core, SQL Server, DbContext, configurations, migrations, relational queries, database-backed reports and durable last-known rate storage. Integrations owns IExchangeRateProvider, ExchangeRateTable, the typed HttpClient, response validation, normalization, timeouts, cancellation and HTTP errors. Caching owns IRateResolver, ResolvedRates, RateUnavailableException, IMemoryCache, freshness, single-flight refresh, stale fallback orchestration and thread-safe shared state. It consumes the provider and store interfaces from their owning projects and maps ExchangeRateTable to Persistence's StoredExchangeRateTable. Api wires the implementations together.
 
 Use EUR as the configurable base and bind it to the dataset. For positive expenses, use current provider-published rates on create and on changes to original amount or currency. Use rate 1 locally for base-to-base conversion. Store original amount/currency, applied rate (base units per original unit), converted amount/base currency and available metadata such as provider and quote time. Preserve this snapshot on metadata-only edits, including expense date changes. Use decimal arithmetic and document precision and rounding. Historical quotes and refunds are outside initial scope.
 
@@ -48,4 +50,4 @@ Use .NET 10, ASP.NET Core, central package management in Directory.Packages.prop
 
 Use NUnit, FakeItEasy and a license-approved FluentAssertions version. Pin the reviewed release centrally. Use controlled time, deterministic synchronization and fake HTTP responses. Use an isolated real SQL Server database, preferably Testcontainers, for API integration tests. All automated tests must run independently of live currency APIs.
 
-Application.UnitTests covers validation, rate direction, precision, rounding and update policy. Integrations.UnitTests covers mapping, malformed responses, HTTP failures, timeouts and cancellation. Caching.UnitTests covers TTL boundaries, stale fallback, concurrent refresh, cancellation and failures. Api.IntegrationTests covers CRUD, persistence, constraints, filters, sorting, reports, errors and statistics. Keep OpenAPI and setup examples aligned with observable behaviour.
+Application.UnitTests covers validation, rate direction, precision, rounding and update policy. Integrations.UnitTests covers mapping, malformed responses, HTTP failures, timeouts and cancellation. Caching.UnitTests covers snapshot validation, provider-to-snapshot mapping, TTL boundaries, stale fallback, concurrent refresh, cancellation and failures. Api.IntegrationTests covers CRUD, persistence, constraints, filters, sorting, reports, errors and statistics. Keep OpenAPI and setup examples aligned with observable behaviour.

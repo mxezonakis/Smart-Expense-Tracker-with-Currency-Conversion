@@ -9,7 +9,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using NUnit.Framework;
-using SmartExpenseTracker.Application.ExchangeRates;
+using SmartExpenseTracker.Integrations;
+using SmartExpenseTracker.Persistence.ExchangeRates;
 
 namespace SmartExpenseTracker.Caching.UnitTests
 {
@@ -55,6 +56,12 @@ namespace SmartExpenseTracker.Caching.UnitTests
         public void DisposeHost() => _services.Dispose();
 
         private Task<ResolvedRates> Resolve() => _services.GetRequiredService<IRateResolver>().ResolveAsync(Token);
+
+        private static StoredExchangeRateTable ToStoredTable(ExchangeRateTable table)
+        {
+            return new StoredExchangeRateTable(table.Provider, table.BaseCurrency, table.PublishedAt,
+                table.BaseUnitsPerCurrencyUnit, table.NextUpdateAt);
+        }
 
         [Test]
         public void AlreadyCancelledCallerDoesNotReadOrRefresh()
@@ -147,7 +154,7 @@ namespace SmartExpenseTracker.Caching.UnitTests
             // Assert
             Assert.That(refreshed.IsFallback, Is.False);
             Assert.That(refreshed.Snapshot.RetrievedAt, Is.EqualTo(_clock.GetUtcNow()));
-            Assert.That(refreshed.Snapshot.Table, Is.EqualTo(_table));
+            Assert.That(refreshed.Snapshot.Table, Is.EqualTo(ToStoredTable(_table)));
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedTwiceExactly();
         }
 
@@ -185,18 +192,18 @@ namespace SmartExpenseTracker.Caching.UnitTests
         public async Task ColdRecoveryRejectsSnapshotForDifferentProviderOrCurrency(bool wrongProvider)
         {
             // Arrange
-            _saved = new RateSnapshot(wrongProvider ? _table with { Provider = "Other" } : _table with
+            _saved = new RateSnapshot(ToStoredTable(wrongProvider ? _table with { Provider = "Other" } : _table with
             {
                 BaseCurrency = "USD",
                 BaseUnitsPerCurrencyUnit = new Dictionary<string, decimal> { ["EUR"] = 1.25m, ["USD"] = 1 }.ToFrozenDictionary()
-            }, _clock.GetUtcNow());
+            }), _clock.GetUtcNow());
 
             // Act
             var resolved = await Resolve();
 
             // Assert
             Assert.That(resolved.IsFallback, Is.False);
-            Assert.That(resolved.Snapshot.Table, Is.EqualTo(_table));
+            Assert.That(resolved.Snapshot.Table, Is.EqualTo(ToStoredTable(_table)));
             Assert.That(_saved, Is.EqualTo(resolved.Snapshot));
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
         }
@@ -206,11 +213,11 @@ namespace SmartExpenseTracker.Caching.UnitTests
         public async Task DurableWinnerIsUsedOnlyWhenValid(bool valid)
         {
             // Arrange
-            var winner = new RateSnapshot(_table with
+            var winner = new RateSnapshot(ToStoredTable(_table with
             {
                 Provider = valid ? "Test" : "Other",
                 BaseUnitsPerCurrencyUnit = new Dictionary<string, decimal> { ["EUR"] = 1, ["USD"] = 0.9m }.ToFrozenDictionary()
-            }, _clock.GetUtcNow());
+            }), _clock.GetUtcNow());
             A.CallTo(() => _store.SaveLatestAsync(A<RateSnapshot>._, A<CancellationToken>._)).Returns(winner);
 
             // Act
@@ -218,7 +225,7 @@ namespace SmartExpenseTracker.Caching.UnitTests
 
             // Assert
             Assert.That(result.IsFallback, Is.False);
-            Assert.That(result.Snapshot, Is.EqualTo(valid ? winner : new RateSnapshot(_table, _clock.GetUtcNow())));
+            Assert.That(result.Snapshot, Is.EqualTo(valid ? winner : new RateSnapshot(ToStoredTable(_table), _clock.GetUtcNow())));
             Assert.That(result.Snapshot.Table.BaseUnitsPerCurrencyUnit["USD"], Is.EqualTo(valid ? 0.9m : 0.8m));
 
             // Act
@@ -251,7 +258,7 @@ namespace SmartExpenseTracker.Caching.UnitTests
 
             // Arrange
             _saved = olderPublication
-                ? original.Snapshot with { Table = _table with { PublishedAt = _table.PublishedAt.AddHours(-1) }, RetrievedAt = _clock.GetUtcNow() }
+                ? original.Snapshot with { Table = ToStoredTable(_table) with { PublishedAt = _table.PublishedAt.AddHours(-1) }, RetrievedAt = _clock.GetUtcNow() }
                 : original.Snapshot with { RetrievedAt = original.Snapshot.RetrievedAt.AddTicks(-1) };
             _clock.Advance(TimeSpan.FromMinutes(2));
 
@@ -285,11 +292,11 @@ namespace SmartExpenseTracker.Caching.UnitTests
             Assert.That(actual, Is.True);
 
             // Arrange
-            _saved = new RateSnapshot(_table with
+            _saved = new RateSnapshot(ToStoredTable(_table with
             {
                 PublishedAt = newerPublication ? _clock.GetUtcNow() : _table.PublishedAt,
                 BaseUnitsPerCurrencyUnit = new Dictionary<string, decimal> { ["EUR"] = 1, ["USD"] = 0.9m }.ToFrozenDictionary()
-            }, _clock.GetUtcNow());
+            }), _clock.GetUtcNow());
             _clock.Advance(TimeSpan.FromMinutes(2));
 
             // Act
@@ -312,7 +319,7 @@ namespace SmartExpenseTracker.Caching.UnitTests
         public async Task SharedDeadlineAfterDurableReadDoesNotStartProvider(bool hasFallback)
         {
             // Arrange
-            var stored = hasFallback ? new RateSnapshot(_table with { PublishedAt = _clock.GetUtcNow().AddHours(-7) },
+            var stored = hasFallback ? new RateSnapshot(ToStoredTable(_table with { PublishedAt = _clock.GetUtcNow().AddHours(-7) }),
                 _clock.GetUtcNow().AddHours(-7)) : null;
             A.CallTo(() => _store.ReadAsync("Test", "EUR", A<CancellationToken>._))
                 .ReturnsLazily(() =>
@@ -407,7 +414,7 @@ namespace SmartExpenseTracker.Caching.UnitTests
 
             // Assert
             Assert.That(live.IsFallback, Is.False);
-            Assert.That(live.Snapshot.Table, Is.EqualTo(_table));
+            Assert.That(live.Snapshot.Table, Is.EqualTo(ToStoredTable(_table)));
 
             // Act
             var actual = await Resolve();
@@ -500,7 +507,7 @@ namespace SmartExpenseTracker.Caching.UnitTests
 
             // Assert
             Assert.That(recovered.IsFallback, Is.False);
-            Assert.That(recovered.Snapshot.Table, Is.EqualTo(_table));
+            Assert.That(recovered.Snapshot.Table, Is.EqualTo(ToStoredTable(_table)));
             Assert.That(_saved, Is.EqualTo(recovered.Snapshot));
 
             // Act

@@ -1,1 +1,6 @@
-<Project Sdk="Microsoft.NET.Sdk" />
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../SmartExpenseTracker.Caching/SmartExpenseTracker.Caching.csproj" />
+    <ProjectReference Include="../SmartExpenseTracker.Persistence/SmartExpenseTracker.Persistence.csproj" />
+  </ItemGroup>
+</Project>

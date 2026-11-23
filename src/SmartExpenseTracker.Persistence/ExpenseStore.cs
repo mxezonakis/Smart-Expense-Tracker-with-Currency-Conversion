@@ -1,7 +1,7 @@
 using System.Linq.Expressions;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
-using SmartExpenseTracker.Application.Expenses;
+using SmartExpenseTracker.Persistence.Expenses;
 
 namespace SmartExpenseTracker.Persistence
 {

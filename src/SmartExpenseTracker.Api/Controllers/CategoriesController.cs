@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using SmartExpenseTracker.Api.Contracts;
 using SmartExpenseTracker.Application.Categories;
+using SmartExpenseTracker.Persistence.Categories;
 
 namespace SmartExpenseTracker.Api.Controllers
 {

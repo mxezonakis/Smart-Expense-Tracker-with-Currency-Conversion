@@ -9,18 +9,18 @@ SmartExpenseTracker.slnx contains exactly five production projects under src and
 | Project | Direct project references (SmartExpenseTracker prefix omitted) |
 |---|---|
 | SmartExpenseTracker.Api | Application, Persistence, Integrations, Caching |
-| SmartExpenseTracker.Application | None |
-| SmartExpenseTracker.Persistence | Application |
-| SmartExpenseTracker.Integrations | Application |
-| SmartExpenseTracker.Caching | Application |
-| SmartExpenseTracker.Application.UnitTests | Application |
-| SmartExpenseTracker.Integrations.UnitTests | Integrations, Application |
-| SmartExpenseTracker.Caching.UnitTests | Caching, Application |
-| SmartExpenseTracker.Api.IntegrationTests | Api, Persistence, Application |
+| SmartExpenseTracker.Application | Caching, Persistence |
+| SmartExpenseTracker.Persistence | None |
+| SmartExpenseTracker.Integrations | None |
+| SmartExpenseTracker.Caching | Integrations, Persistence |
+| SmartExpenseTracker.Application.UnitTests | Application, Caching, Persistence |
+| SmartExpenseTracker.Integrations.UnitTests | Integrations |
+| SmartExpenseTracker.Caching.UnitTests | Caching, Integrations, Persistence |
+| SmartExpenseTracker.Api.IntegrationTests | Api, Caching, Integrations, Persistence |
 
-Api is the DI composition root. Keep controllers thin. Api owns HTTP contracts, validation, ProblemDetails, OpenAPI, request statistics middleware and its read-only endpoint. Application owns business workflows, models, expense/category rules, conversion policies, reporting orchestration and the interfaces for provider access, cached rate resolution and persistence.
+Api is the DI composition root. Keep controllers thin. Api owns HTTP contracts, validation, ProblemDetails, OpenAPI, request statistics middleware and its read-only endpoint. Application owns business workflows, application inputs, expense/category rules, conversion policies and reporting orchestration. It consumes the interfaces exposed by Caching and Persistence.
 
-Persistence owns EF Core, SQL Server, DbContext, configurations, migrations, relational queries, database-backed reports and durable last-known rate storage. Integrations owns the typed HttpClient, provider contracts, response validation, normalization, timeouts, cancellation and HTTP errors. Caching owns IMemoryCache, freshness, single-flight refresh, stale fallback orchestration and thread-safe shared state. Inject the provider and durable store through Application interfaces. Only Api wires their implementations together.
+Persistence owns all store interfaces, their records and failure types, EF Core, SQL Server, DbContext, configurations, migrations, relational queries, database-backed reports and durable last-known rate storage. Integrations owns IExchangeRateProvider, ExchangeRateTable, the typed HttpClient, response validation, normalization, timeouts, cancellation and HTTP errors. Caching owns IRateResolver, ResolvedRates, RateUnavailableException, IMemoryCache, freshness, single-flight refresh, stale fallback orchestration and thread-safe shared state. It consumes the provider and store interfaces from their owning projects and maps ExchangeRateTable to Persistence's StoredExchangeRateTable. Api wires the implementations together.
 
 Use EUR as the configurable base and bind it to the dataset. For positive expenses, use current provider-published rates on create and on changes to original amount or currency. Use rate 1 locally for base-to-base conversion. Store original amount/currency, applied rate (base units per original unit), converted amount/base currency and available metadata such as provider and quote time. Preserve this snapshot on metadata-only edits, including expense date changes. Use decimal arithmetic and document precision and rounding. Historical quotes and refunds are outside initial scope.
 
@@ -53,7 +53,7 @@ POST /api/categories returns 201 with the resource and Location. GET collection/
 | 0. Contracts and documented assumptions | Document API shapes, status codes, query limits, monetary boundaries and example conversions. Record provider assumptions and source of quote age. | Walk through a foreign expense, metadata edit, outage and week boundary against the contracts and matrix. |
 | 1. Solution skeleton | Nine projects have exactly the references above, centralized packages and a .NET 10 API host with DI and options validation. | Restore and build the solution, inspect references and start the API in a host test. |
 | 2. Category CRUD and persistence | Migrations create SQL Server tables and unique category names. Create, read, update and delete available categories. | Migrate an empty isolated database, round-trip CRUD and race duplicate inserts. Verify restriction with a referenced category once expense storage exists. |
-| 3. Exchange-rate HTTP provider | Implement at least one actual external provider behind the Application contract. Normalize valid quotes and distinguish bad payloads, HTTP failures, timeouts and caller cancellation. | Run Integrations.UnitTests with representative payloads and a controlled HTTP handler, including reciprocal-rate mapping. |
+| 3. Exchange-rate HTTP provider | Implement at least one actual external provider behind the Integrations-owned IExchangeRateProvider contract. Normalize valid quotes and distinguish bad payloads, HTTP failures, timeouts and caller cancellation. | Run Integrations.UnitTests with representative payloads and a controlled HTTP handler, including reciprocal-rate mapping. |
 | 4. Caching and durable fallback | Separate fresh and stale windows, persist last-known quotes, coalesce refreshes and keep synchronization bounded. | Advance fake time across both deadlines. Overlap callers, cancel one waiter, fail refresh and restart the host with the same SQL data. Verify call counts and fallback age. |
 | 5. Expense CRUD and currency conversion | Persist required expense fields and conversion snapshots atomically. Reprice only on monetary changes. Reject invalid inputs and prevent deleting referenced categories. | Run business rule tests and SQL-backed CRUD. Compare snapshots before/after edits. Verify identity conversion makes zero upstream calls and 503 leaves data intact. |
 | 6. Filtering and sorting | Combine date, category and currency filters. Support date and converted-amount sorts. Return all matching expenses. Add indexes suited to query predicates. | Query seeded mixed currencies and tied sort values in SQL Server. Check complete result sets above 100 matches, combined filters and default ID order. Inspect generated query and schema. |
@@ -64,6 +64,8 @@ POST /api/categories returns 201 with the resource and Location. GET collection/
 ## Historical requirement traceability and phase alignment report
 
 Reviewed against the private original, including its Requirements, Optional, Evaluation Criteria, Sample APIs and delivery instruction. The first column paraphrases the assignment. The remaining columns record our implementation and evidence. The phase gates above give the detailed test scenarios.
+
+Architecture descriptions and test results in this historical report refer to those phases. The current reference direction and interface ownership are recorded above and in the architecture revision below.
 
 The reviewed Phase 2 head was `54d7e8d`. CI passed 6 application unit tests, 2 host tests and 10 real SQL Server integration tests. Provider, expense, cache, reporting and statistics behavior remains future work. [Phase 2 verification](https://github.com/mxezonakis/Smart-Expense-Tracker-with-Currency-Conversion/actions/runs/44749813794)
 
@@ -124,7 +126,7 @@ The assignment requires persisted expense CRUD and automatic base-currency conve
 - Bind the configured base (default EUR) on the first successful expense write for the dataset. Keep that binding even after all expenses are removed. Reject creates and updates under a conflicting base (409). Before resolving a foreign quote for creation, check for an existing mismatch outside a transaction. At first insertion, serialize competing initializers and commit the binding and expense together. A failed first insert rolls both back.
 - POST returns 201 with Location, GET returns 200, PUT and DELETE return 204. Missing expenses return 404. Concurrent conflicting edits and deletion of referenced categories return 409. Errors use ProblemDetails.
 
-## Phase 9 final verification — 21 November 2026
+## Historical Phase 9 final verification — 21 November 2026
 
 This section supersedes the earlier phase-time verification statuses above. The original specification was reread in full. Mandatory functionality and evaluation criteria are implemented; optional JWT authentication, isolated users and background refresh remain unselected. Provider names, example currencies and report intervals in the assignment are examples; SQL Server, EUR, stored snapshots, Monday-start weeks, publication-age limits and deterministic ordering are approved project decisions. Pagination is not required and is absent.
 
@@ -161,3 +163,16 @@ The assignment's concurrency evaluation criterion is addressed by the existing c
 - Verification: ExpensePreconditionTests covers rejected headers before I/O; ExpenseApiTests covers real SQL rowversions, stale clients, intervening writes/deletes, unchanged requests without writes, competing requests, preserved snapshots and command counts; OpenApiDocumentationTests checks generated header contracts. Final verification results are reported at review, separately from historical Phase 9 counts above.
 
 No authentication, multi-user support, background jobs, migrations or unrelated product features are added. The no-op refinement remains uncommitted pending independent review.
+
+## User-requested architecture revision — 23 November 2026
+
+The user explicitly requested interfaces in the projects that implement them and dependencies from higher layers to lower layers. This replaces the earlier Application-owned infrastructure contracts. The five production projects and four test projects remain.
+
+The original assignment was reread in full. This revision addresses its code structure, readability and maintainability evaluation criterion through the user's selected layer direction; it does not add functional requirements.
+
+- Application references Caching and Persistence. Caching references Integrations and Persistence. Both leaf projects have no project references. Api may reference all four to compose DI.
+- Store interfaces, records and failures belong to Persistence; the provider interface and rate table belong to Integrations; the resolver interface and result belong to Caching. Application keeps its workflows and application-only inputs.
+- Caching maps the provider rate table to the durable snapshot model without changing rates, publication/retrieval times or next-update hints. This keeps Persistence and Integrations independent.
+- Existing HTTP behavior, monetary rules, SQL schema/migrations, cache deadlines, cancellation and concurrency behavior remain the acceptance baseline. Existing tests keep explicit, separated Arrange / Act / Assert sections and controlled external dependencies.
+
+Verification gate: inspect references for cycles and upward dependencies; build with warnings as errors; run the unit, host and real SQL Server suites; check formatting and coverage. Record actual results separately from the historical phase counts above.

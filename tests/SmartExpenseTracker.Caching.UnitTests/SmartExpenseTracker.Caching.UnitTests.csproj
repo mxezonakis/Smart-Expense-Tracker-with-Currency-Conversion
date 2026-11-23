@@ -18,6 +18,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/SmartExpenseTracker.Caching/SmartExpenseTracker.Caching.csproj" />
-    <ProjectReference Include="../../src/SmartExpenseTracker.Application/SmartExpenseTracker.Application.csproj" />
+    <ProjectReference Include="../../src/SmartExpenseTracker.Integrations/SmartExpenseTracker.Integrations.csproj" />
+    <ProjectReference Include="../../src/SmartExpenseTracker.Persistence/SmartExpenseTracker.Persistence.csproj" />
   </ItemGroup>
 </Project>

@@ -1,19 +1,13 @@
-namespace SmartExpenseTracker.Application.Expenses
+namespace SmartExpenseTracker.Persistence.Expenses
 {
-    public sealed record ExpenseInput(decimal Amount, string? Currency, int CategoryId, DateOnly? Date, string? Description);
-
     public sealed record ConversionSnapshot(string BaseCurrency, decimal AppliedRate, decimal ConvertedAmount,
         string? Provider, DateTimeOffset? PublishedAt, bool IsFallback);
 
     public sealed record Expense(int Id, decimal Amount, string Currency, int CategoryId, DateOnly Date,
         string? Description, ConversionSnapshot Conversion);
 
-    public sealed record DatasetCurrency(string Code);
-
     // Internal workflow state, never part of the HTTP request or response contract.
     public sealed record ExpenseSnapshot(Expense Expense, byte[] Version);
-
-    public sealed record ExpenseUpdateResult(bool Updated, byte[] Version);
 
     public interface IExpenseStore
     {

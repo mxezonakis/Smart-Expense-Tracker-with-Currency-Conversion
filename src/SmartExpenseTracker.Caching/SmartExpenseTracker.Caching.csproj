@@ -2,6 +2,7 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" />
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
-    <ProjectReference Include="../SmartExpenseTracker.Application/SmartExpenseTracker.Application.csproj" />
+    <ProjectReference Include="../SmartExpenseTracker.Integrations/SmartExpenseTracker.Integrations.csproj" />
+    <ProjectReference Include="../SmartExpenseTracker.Persistence/SmartExpenseTracker.Persistence.csproj" />
   </ItemGroup>
 </Project>

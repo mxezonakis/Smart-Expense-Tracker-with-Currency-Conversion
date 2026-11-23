@@ -1,6 +1,6 @@
-namespace SmartExpenseTracker.Application.ExchangeRates
+namespace SmartExpenseTracker.Persistence.ExchangeRates
 {
-    public sealed record RateSnapshot(ExchangeRateTable Table, DateTimeOffset RetrievedAt)
+    public sealed record RateSnapshot(StoredExchangeRateTable Table, DateTimeOffset RetrievedAt)
     {
         public bool IsValidAt(DateTimeOffset now)
         {
@@ -16,28 +16,6 @@ namespace SmartExpenseTracker.Application.ExchangeRates
         private static bool IsCurrencyCode(string? code)
         {
             return code is { Length: 3 } && code.All(char.IsAsciiLetterUpper);
-        }
-    }
-
-    public sealed record ResolvedRates(RateSnapshot Snapshot, bool IsFallback);
-
-    public interface IRateResolver
-    {
-        Task<ResolvedRates> ResolveAsync(CancellationToken cancellationToken);
-    }
-
-    public interface IRateSnapshotStore
-    {
-        Task<RateSnapshot?> ReadAsync(string provider, string baseCurrency, CancellationToken cancellationToken);
-
-        Task<RateSnapshot> SaveLatestAsync(RateSnapshot snapshot, CancellationToken cancellationToken);
-    }
-
-    public sealed class RateUnavailableException : Exception
-    {
-        public RateUnavailableException(Exception? cause = null)
-            : base("No eligible exchange-rate table is available.", cause)
-        {
         }
     }
 }

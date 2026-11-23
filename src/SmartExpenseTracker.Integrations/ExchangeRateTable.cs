@@ -1,6 +1,6 @@
 using System.Collections.Frozen;
 
-namespace SmartExpenseTracker.Application.ExchangeRates
+namespace SmartExpenseTracker.Integrations
 {
     public sealed record ExchangeRateTable(
         string Provider,

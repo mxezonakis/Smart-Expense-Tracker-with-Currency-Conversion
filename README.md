@@ -143,7 +143,17 @@ PUT reads the expense and SQL Server rowversion once, compares it with the clien
 
 ## Solution layout
 
-Under `src/`, Api composes the host. Application owns workflow contracts. Persistence owns EF Core, migrations and SQL Server access. Integrations owns the exchange-rate HTTP client and Caching coordinates refresh and fallback. Under `tests/`, Application, Integrations and Caching each have a unit-test project. Api.IntegrationTests exercises host behavior.
+Under `src/`, dependencies flow from higher layers to lower layers, and each interface lives in its implementation's project:
+
+| Project | Direct project references | Responsibility |
+|---|---|---|
+| Api | Application, Caching, Integrations, Persistence | Executable host, controllers, HTTP contracts and DI composition |
+| Application | Caching, Persistence | Business workflows, validation and conversion rules |
+| Caching | Integrations, Persistence | Rate resolver interface, refresh coordination and fallback |
+| Persistence | None | Store interfaces and records, EF Core, migrations and SQL Server |
+| Integrations | None | Provider interface, normalized rate table and HTTP client |
+
+Caching maps provider rates into the durable snapshot model, keeping Persistence and Integrations independent. Under `tests/`, Application, Integrations and Caching each have a unit-test project; Api.IntegrationTests exercises HTTP and SQL behavior.
 
 ## Exchange-rate provider
 

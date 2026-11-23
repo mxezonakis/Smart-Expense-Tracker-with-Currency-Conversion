@@ -1,5 +1,5 @@
 using Microsoft.EntityFrameworkCore;
-using SmartExpenseTracker.Application.Reporting;
+using SmartExpenseTracker.Persistence.Reporting;
 
 namespace SmartExpenseTracker.Persistence
 {

@@ -8,7 +8,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using SmartExpenseTracker.Api.Contracts;
-using SmartExpenseTracker.Application.Reporting;
+using SmartExpenseTracker.Persistence.Reporting;
 
 namespace SmartExpenseTracker.Api.IntegrationTests
 {

@@ -1,6 +1,9 @@
-namespace SmartExpenseTracker.Application.Categories
+namespace SmartExpenseTracker.Persistence.Categories
 {
-    public sealed record Category(int Id, string Name);
+    public sealed record Category(int Id, string Name)
+    {
+        public const int MaximumNameLength = 100;
+    }
 
     public interface ICategoryStore
     {
@@ -15,14 +18,6 @@ namespace SmartExpenseTracker.Application.Categories
     {
         public DuplicateCategoryNameException(Exception innerException)
             : base("A category with this name already exists.", innerException)
-        {
-        }
-    }
-
-    public sealed class InvalidCategoryNameException : Exception
-    {
-        public InvalidCategoryNameException()
-            : base("Name must contain 1 to 100 characters after trimming.")
         {
         }
     }

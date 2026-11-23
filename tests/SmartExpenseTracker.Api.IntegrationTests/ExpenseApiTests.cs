@@ -12,8 +12,9 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using SmartExpenseTracker.Api.Contracts;
-using SmartExpenseTracker.Application.ExchangeRates;
+using SmartExpenseTracker.Caching;
 using SmartExpenseTracker.Persistence;
+using SmartExpenseTracker.Persistence.ExchangeRates;
 using Testcontainers.MsSql;
 
 namespace SmartExpenseTracker.Api.IntegrationTests
@@ -1684,7 +1685,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
                     throw new RateUnavailableException();
                 }
 
-                var table = new ExchangeRateTable("Test", "EUR", Publication, new Dictionary<string, decimal>
+                var table = new StoredExchangeRateTable("Test", "EUR", Publication, new Dictionary<string, decimal>
                 {
                     ["EUR"] = 1m,
                     ["USD"] = 0.925500000001m,

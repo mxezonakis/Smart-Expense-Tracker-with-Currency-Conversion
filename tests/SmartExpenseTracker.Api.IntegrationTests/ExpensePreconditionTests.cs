@@ -4,8 +4,8 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
-using SmartExpenseTracker.Application.Expenses;
-using SmartExpenseTracker.Application.ExchangeRates;
+using SmartExpenseTracker.Caching;
+using SmartExpenseTracker.Persistence.Expenses;
 
 namespace SmartExpenseTracker.Api.IntegrationTests
 {

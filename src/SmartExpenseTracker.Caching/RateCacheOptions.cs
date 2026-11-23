@@ -1,7 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using SmartExpenseTracker.Application.ExchangeRates;
 
 namespace SmartExpenseTracker.Caching
 {

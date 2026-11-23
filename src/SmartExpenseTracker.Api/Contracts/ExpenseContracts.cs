@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using SmartExpenseTracker.Application.Expenses;
+using SmartExpenseTracker.Persistence.Expenses;
 
 namespace SmartExpenseTracker.Api.Contracts
 {

@@ -1,6 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
-using SmartExpenseTracker.Application.Categories;
+using SmartExpenseTracker.Persistence.Categories;
 
 namespace SmartExpenseTracker.Persistence
 {
@@ -19,7 +19,7 @@ namespace SmartExpenseTracker.Persistence
             builder.ToTable("Categories", table => table.HasCheckConstraint("CK_Categories_CanonicalName",
                 $"DATALENGTH([Name]) > 0 AND UNICODE(LEFT([Name], 1)) NOT IN ({whitespace}) AND UNICODE(RIGHT([Name], 1)) NOT IN ({whitespace})"));
             builder.HasKey(row => row.Id);
-            builder.Property(row => row.Name).IsRequired().HasMaxLength(CategoryService.MaximumNameLength)
+            builder.Property(row => row.Name).IsRequired().HasMaxLength(Category.MaximumNameLength)
                 .UseCollation("Latin1_General_100_CI_AS_SC");
             builder.HasIndex(row => row.Name).IsUnique();
         }

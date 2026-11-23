@@ -1,5 +1,5 @@
 using System.ComponentModel.DataAnnotations;
-using SmartExpenseTracker.Application.Expenses;
+using SmartExpenseTracker.Persistence.Expenses;
 
 namespace SmartExpenseTracker.Api.Contracts
 {

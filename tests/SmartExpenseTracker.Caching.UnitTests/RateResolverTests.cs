@@ -191,27 +191,86 @@ namespace SmartExpenseTracker.Caching.UnitTests
             A.CallTo(() => _store.SaveLatestAsync(A<RateSnapshot>._, A<CancellationToken>._)).MustHaveHappenedOnceExactly();
         }
 
-        [TestCase("0.0000000000005")]
-        [TestCase("999999.9999999999995")]
-        public async Task UnrepresentableReplacementKeepsEligibleRatesInMemoryAndStorage(string rawRate)
+        [TestCase("0.0000000000005", 24)]
+        [TestCase("999999.9999999999995", 48)]
+        public async Task MixedTableUsesFreshOrRetainedRatePerCurrencyUntilOriginalExpiry(string rawRate, int maximumAgeHours)
         {
             // Arrange
-            var original = await Resolve();
-            _clock.Advance(TimeSpan.FromHours(7));
+            var configuration = new Dictionary<string, string?>
+            {
+                ["RateCache:BaseCurrency"] = "IRR",
+                ["RateCache:MaximumAge"] = TimeSpan.FromHours(maximumAgeHours).ToString("c")
+            };
+            using var host = CreateHost(configuration: configuration);
+            var resolver = host.GetRequiredService<IRateResolver>();
+            var start = _clock.GetUtcNow();
             var rate = decimal.Parse(rawRate, System.Globalization.CultureInfo.InvariantCulture);
+            ExchangeRateTable Publish(decimal usd, decimal vnd) => new ExchangeRateTable("Test", "IRR", _clock.GetUtcNow(),
+                new Dictionary<string, decimal> { ["IRR"] = 1m, ["USD"] = usd, ["VND"] = vnd }.ToFrozenDictionary());
+            _table = Publish(900000m, 65m);
+            A.CallTo(() => _provider.GetLatestAsync("IRR", A<CancellationToken>._)).ReturnsLazily(() => Task.FromResult(_table));
+            A.CallTo(() => _store.ReadAsync("Test", "IRR", A<CancellationToken>._)).ReturnsLazily(() => Task.FromResult(_saved));
+            await resolver.ResolveAsync(Token);
+
+            // Act
+            _clock.Advance(TimeSpan.FromHours(7));
+            _table = Publish(rate, 66m);
+            var mixed = await resolver.ResolveAsync(Token);
+
+            // Assert
+            Assert.That(mixed.ForCurrency("VND"), Is.EqualTo(new ResolvedRate(66m, _table.PublishedAt, false)));
+            var fallback = new ResolvedRate(900000m, start, true);
+            Assert.That(mixed.ForCurrency("USD"), Is.EqualTo(fallback));
+            Assert.That(mixed.ForCurrency("ZZZ"), Is.Null);
+            A.CallTo(() => _provider.GetLatestAsync("IRR", A<CancellationToken>._)).MustHaveHappenedTwiceExactly();
+
+            // Act: a second mixed publication must carry the original USD time through restart.
+            _clock.Advance(TimeSpan.FromHours(maximumAgeHours - 8));
+            _table = Publish(rate, 67m);
+            await resolver.ResolveAsync(Token);
+            using var restarted = CreateHost(configuration: configuration);
+            var recovered = restarted.GetRequiredService<IRateResolver>();
+            var afterRestart = await recovered.ResolveAsync(Token);
+            Assert.That(afterRestart.ForCurrency("USD"), Is.EqualTo(fallback));
+            _clock.Advance(TimeSpan.FromHours(1));
+            var boundary = await recovered.ResolveAsync(Token);
+
+            // Assert
+            Assert.Throws<RateUnavailableException>(() => afterRestart.ForCurrency("USD"));
+            Assert.Throws<RateUnavailableException>(() => boundary.ForCurrency("USD"));
+            Assert.That(boundary.ForCurrency("VND"), Is.EqualTo(new ResolvedRate(67m, _table.PublishedAt, false)));
+            A.CallTo(() => _provider.GetLatestAsync("IRR", A<CancellationToken>._)).MustHaveHappened(3, Times.Exactly);
+
+            _clock.Advance(TimeSpan.FromHours(6));
+            _table = Publish(910000m, 68m);
+            var healthy = await recovered.ResolveAsync(Token);
+            Assert.That(healthy.ForCurrency("USD"), Is.EqualTo(new ResolvedRate(910000m, _table.PublishedAt, false)));
+            Assert.That(_saved!.FallbackRates, Is.Empty);
+        }
+
+        [Test]
+        public async Task ColdMixedTableServesUsableCurrenciesWithoutRetryingForAnUnusableOne()
+        {
+            // Arrange
             _table = _table with
             {
-                PublishedAt = _clock.GetUtcNow(),
-                BaseUnitsPerCurrencyUnit = new Dictionary<string, decimal> { ["EUR"] = 1m, ["USD"] = rate }.ToFrozenDictionary()
+                BaseUnitsPerCurrencyUnit = new Dictionary<string, decimal>
+                {
+                    ["EUR"] = 1m,
+                    ["USD"] = 1000000m,
+                    ["VND"] = 0.5m
+                }.ToFrozenDictionary()
             };
 
             // Act
-            var result = await Resolve();
+            var first = await Resolve();
+            var second = await Resolve();
 
             // Assert
-            Assert.That(result, Is.EqualTo(new ResolvedRates(original.Snapshot, true)));
-            Assert.That(_saved, Is.EqualTo(original.Snapshot));
-            A.CallTo(() => _store.SaveLatestAsync(A<RateSnapshot>._, A<CancellationToken>._)).MustHaveHappenedOnceExactly();
+            Assert.Throws<RateUnavailableException>(() => first.ForCurrency("USD"));
+            Assert.That(second.ForCurrency("VND"), Is.EqualTo(new ResolvedRate(0.5m, _table.PublishedAt, false)));
+            Assert.That(_saved!.FallbackRates, Is.Empty);
+            A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
         }
 
         [TestCase(true)]

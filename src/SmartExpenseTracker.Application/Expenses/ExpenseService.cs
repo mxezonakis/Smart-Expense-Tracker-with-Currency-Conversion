@@ -73,6 +73,26 @@ namespace SmartExpenseTracker.Application.Expenses
 
         private async Task<Expense> PrepareAsync(ExpenseInput input, Expense? previous, CancellationToken cancellationToken)
         {
+            var (currency, date, description) = ValidateFields(input);
+            if (input.CategoryId <= 0 || await _categories.FindAsync(input.CategoryId, cancellationToken) is null)
+            {
+                throw new ExpenseValidationException("categoryId", "An existing category is required.");
+            }
+
+            if (previous is null && currency != _baseCurrency.Code &&
+                await _expenses.HasConflictingDatasetCurrencyAsync(_baseCurrency.Code, cancellationToken))
+            {
+                throw new ExpenseConflictException("The configured base currency differs from the dataset currency.");
+            }
+
+            var conversion = previous is not null && previous.Amount == input.Amount && previous.Currency == currency
+                ? previous.Conversion
+                : await ConvertAsync(input.Amount, currency, cancellationToken);
+            return new Expense(previous?.Id ?? 0, input.Amount, currency, input.CategoryId, date, description, conversion);
+        }
+
+        private static (string Currency, DateOnly Date, string? Description) ValidateFields(ExpenseInput input)
+        {
             if (input.Amount is < 0.01m or > 99999999.99m || decimal.Round(input.Amount, 2) != input.Amount)
             {
                 throw new ExpenseValidationException("amount", "Amount must be between 0.01 and 99999999.99 in whole cents.");
@@ -95,23 +115,7 @@ namespace SmartExpenseTracker.Application.Expenses
                 throw new ExpenseValidationException("description", "Description may contain at most 500 characters after trimming.");
             }
 
-            if (input.CategoryId <= 0 || await _categories.FindAsync(input.CategoryId, cancellationToken) is null)
-            {
-                throw new ExpenseValidationException("categoryId", "An existing category is required.");
-            }
-
-            code = code.ToUpperInvariant();
-            if (previous is null && code != _baseCurrency.Code &&
-                await _expenses.HasConflictingDatasetCurrencyAsync(_baseCurrency.Code, cancellationToken))
-            {
-                throw new ExpenseConflictException("The configured base currency differs from the dataset currency.");
-            }
-
-            var conversion = previous is not null && previous.Amount == input.Amount && previous.Currency == code
-                ? previous.Conversion
-                : await ConvertAsync(input.Amount, code, cancellationToken);
-            return new Expense(previous?.Id ?? 0, input.Amount, code, input.CategoryId, date,
-                string.IsNullOrEmpty(description) ? null : description, conversion);
+            return (code.ToUpperInvariant(), date, string.IsNullOrEmpty(description) ? null : description);
         }
 
         private async Task<ConversionSnapshot> ConvertAsync(decimal amount, string currency, CancellationToken cancellationToken)
@@ -128,18 +132,11 @@ namespace SmartExpenseTracker.Application.Expenses
                 throw new RateUnavailableException();
             }
 
-            if (!table.BaseUnitsPerCurrencyUnit.TryGetValue(currency, out var rate))
-            {
+            var quote = resolved.ForCurrency(currency) ??
                 throw new ExpenseValidationException("currency", "Currency is unsupported by the exchange-rate table.");
-            }
-
-            if (!ConversionSnapshot.TryGetAppliedRate(rate, out var applied))
-            {
-                throw new RateUnavailableException();
-            }
-
-            return new ConversionSnapshot(table.BaseCurrency, applied, decimal.Round(amount * applied, 2, MidpointRounding.ToEven),
-                table.Provider, table.PublishedAt.ToUniversalTime(), resolved.IsFallback);
+            var convertedAmount = decimal.Round(amount * quote.AppliedRate, 2, MidpointRounding.ToEven);
+            return new ConversionSnapshot(table.BaseCurrency, quote.AppliedRate, convertedAmount,
+                table.Provider, quote.PublishedAt.ToUniversalTime(), quote.IsFallback);
         }
     }
 }

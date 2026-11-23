@@ -26,23 +26,7 @@ namespace SmartExpenseTracker.Integrations
             try
             {
                 using var response = await _client.GetAsync(baseCurrency, cancellationToken);
-                Feed? feed;
-                try
-                {
-                    using var body = await response.Content.ReadAsStreamAsync(cancellationToken);
-                    feed = await JsonSerializer.DeserializeAsync<Feed>(body, _jsonOptions, cancellationToken);
-                }
-                catch (JsonException) when (!response.IsSuccessStatusCode)
-                {
-                    throw new HttpRequestException("Unsuccessful exchange-rate HTTP response.", null, response.StatusCode);
-                }
-
-                if (feed is { Result: "error" } && !string.IsNullOrWhiteSpace(feed.ErrorType))
-                {
-                    throw new ExchangeRateApiException(feed.ErrorType, response.StatusCode);
-                }
-
-                response.EnsureSuccessStatusCode();
+                var feed = await ReadFeedAsync(response, cancellationToken);
                 return Normalize(feed, baseCurrency);
             }
             catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested && exception.InnerException is TimeoutException)
@@ -55,6 +39,28 @@ namespace SmartExpenseTracker.Integrations
             }
         }
 
+        private static async Task<Feed?> ReadFeedAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+        {
+            Feed? feed;
+            try
+            {
+                using var body = await response.Content.ReadAsStreamAsync(cancellationToken);
+                feed = await JsonSerializer.DeserializeAsync<Feed>(body, _jsonOptions, cancellationToken);
+            }
+            catch (JsonException) when (!response.IsSuccessStatusCode)
+            {
+                throw new HttpRequestException("Unsuccessful exchange-rate HTTP response.", null, response.StatusCode);
+            }
+
+            if (feed is { Result: "error" } && !string.IsNullOrWhiteSpace(feed.ErrorType))
+            {
+                throw new ExchangeRateApiException(feed.ErrorType, response.StatusCode);
+            }
+
+            response.EnsureSuccessStatusCode();
+            return feed;
+        }
+
         private static readonly JsonSerializerOptions _jsonOptions = new()
         {
             AllowDuplicateProperties = false
@@ -62,34 +68,53 @@ namespace SmartExpenseTracker.Integrations
 
         private ExchangeRateTable Normalize(Feed? feed, string baseCurrency)
         {
-            if (feed?.Result != "success" || feed.BaseCode != baseCurrency ||
-                feed.PublishedUnix is <= 0 or > 253402300799 ||
-                feed.Rates == null || !feed.Rates.TryGetValue(baseCurrency, out var identity) || identity != 1m ||
-                feed.Rates.Count < 2)
+            if (feed?.Result != "success" || feed.BaseCode != baseCurrency)
             {
                 throw new InvalidDataException("Incomplete or inconsistent exchange-rate response.");
             }
 
-            var publishedAt = DateTimeOffset.FromUnixTimeSeconds(feed.PublishedUnix);
+            if (feed.Rates is not { Count: >= 2 } rates || rates.GetValueOrDefault(baseCurrency) != 1m)
+            {
+                throw new InvalidDataException("Incomplete or inconsistent exchange-rate response.");
+            }
+
+            var publishedAt = ReadTimestamp(feed.PublishedUnix)
+                ?? throw new InvalidDataException("Incomplete or inconsistent exchange-rate response.");
             if (publishedAt - _clock.GetUtcNow() > _maximumClockSkew)
             {
                 throw new InvalidDataException("Exchange-rate publication time is in the future.");
             }
 
+            return new ExchangeRateTable("ExchangeRate-API", baseCurrency, publishedAt,
+                NormalizeRates(rates), ReadTimestamp(feed.NextUpdateUnix));
+        }
+
+        private static FrozenDictionary<string, decimal> NormalizeRates(Dictionary<string, decimal> rates)
+        {
             var normalized = new Dictionary<string, decimal>(StringComparer.Ordinal);
-            foreach (var (code, rate) in feed.Rates)
+            foreach (var (code, rate) in rates)
             {
-                if (!IsCurrencyCode(code) || rate <= 0 || 1m / rate == 0)
+                if (!IsCurrencyCode(code) || rate <= 0)
                 {
                     throw new InvalidDataException("Invalid exchange-rate entry.");
                 }
 
-                normalized.Add(code, 1m / rate);
+                var baseUnitsPerCurrencyUnit = 1m / rate;
+                if (baseUnitsPerCurrencyUnit == 0)
+                {
+                    throw new InvalidDataException("Invalid exchange-rate entry.");
+                }
+
+                normalized.Add(code, baseUnitsPerCurrencyUnit);
             }
 
-            return new ExchangeRateTable("ExchangeRate-API", baseCurrency,
-                publishedAt, normalized.ToFrozenDictionary(StringComparer.Ordinal),
-                feed.NextUpdateUnix is > 0 and <= 253402300799 ? DateTimeOffset.FromUnixTimeSeconds(feed.NextUpdateUnix.Value) : null);
+            return normalized.ToFrozenDictionary(StringComparer.Ordinal);
+        }
+
+        private static DateTimeOffset? ReadTimestamp(long? unixSeconds)
+        {
+            const long lastSupportedSecond = 253402300799;
+            return unixSeconds is > 0 and <= lastSupportedSecond ? DateTimeOffset.FromUnixTimeSeconds(unixSeconds.Value) : null;
         }
 
         private static bool IsCurrencyCode(string? value)

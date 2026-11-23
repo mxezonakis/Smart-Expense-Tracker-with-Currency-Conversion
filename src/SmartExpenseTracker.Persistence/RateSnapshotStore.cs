@@ -33,21 +33,43 @@ namespace SmartExpenseTracker.Persistence
 
             try
             {
-                var rates = JsonSerializer.Deserialize<Dictionary<string, decimal>>(row.Rates, _jsonOptions);
-                if (rates == null)
+                var payload = ReadPayload(row.Rates);
+                if (payload?.Rates == null || payload.Fallbacks == null)
                 {
                     return null;
                 }
 
                 var table = new StoredExchangeRateTable(row.Provider, row.BaseCurrency, row.PublishedAt,
-                    rates.ToFrozenDictionary(StringComparer.Ordinal), row.NextUpdateAt);
-                var snapshot = new RateSnapshot(table, row.RetrievedAt);
+                    payload.Rates.ToFrozenDictionary(StringComparer.Ordinal), row.NextUpdateAt);
+                var snapshot = new RateSnapshot(table, row.RetrievedAt)
+                {
+                    FallbackRates = payload.Fallbacks.ToFrozenDictionary(StringComparer.Ordinal)
+                };
                 return snapshot.IsValidAt(_clock.GetUtcNow()) ? snapshot : null;
             }
             catch (JsonException)
             {
                 return null;
             }
+        }
+
+        private static SnapshotPayload? ReadPayload(string ratesJson)
+        {
+            using var json = JsonDocument.Parse(ratesJson, new JsonDocumentOptions { AllowDuplicateProperties = false });
+            var root = json.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            if (root.TryGetProperty("Rates", out _))
+            {
+                return root.Deserialize<SnapshotPayload>(_jsonOptions);
+            }
+
+            // Older rows store just the published currency-to-rate dictionary.
+            var rates = root.Deserialize<Dictionary<string, decimal>>(_jsonOptions);
+            return rates == null ? null : new SnapshotPayload(rates, FrozenDictionary<string, StoredCurrencyRate>.Empty);
         }
 
         public async Task<RateSnapshot> SaveLatestAsync(RateSnapshot snapshot, CancellationToken cancellationToken)
@@ -58,21 +80,29 @@ namespace SmartExpenseTracker.Persistence
             }
 
             var table = snapshot.Table;
-            var rates = JsonSerializer.Serialize(table.BaseUnitsPerCurrencyUnit);
             await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
             // Hold the row (or missing-key range) through validation and replacement.
             var row = await _context.Set<RateSnapshotRow>().FromSqlInterpolated(
                 $"SELECT * FROM [RateSnapshots] WITH (UPDLOCK, HOLDLOCK) WHERE Provider = {table.Provider} AND BaseCurrency = {table.BaseCurrency}")
                 .AsNoTracking().SingleOrDefaultAsync(cancellationToken);
             var existing = Decode(row, table.Provider, table.BaseCurrency);
-            if (existing != null && (existing.Table.PublishedAt > table.PublishedAt ||
-                (existing.Table.PublishedAt == table.PublishedAt && existing.RetrievedAt >= snapshot.RetrievedAt)))
+            var winner = existing?.MergeWith(snapshot) ?? snapshot;
+            if (!ReferenceEquals(winner, existing))
             {
-                await transaction.CommitAsync(cancellationToken);
-                return existing;
+                await WriteSnapshotAsync(winner, insert: row == null, cancellationToken);
             }
 
-            if (row == null)
+            await transaction.CommitAsync(cancellationToken);
+            return winner;
+        }
+
+        private async Task WriteSnapshotAsync(RateSnapshot snapshot, bool insert, CancellationToken cancellationToken)
+        {
+            var table = snapshot.Table;
+            var rates = snapshot.FallbackRates.Count == 0
+                ? JsonSerializer.Serialize(table.BaseUnitsPerCurrencyUnit)
+                : JsonSerializer.Serialize(new SnapshotPayload(table.BaseUnitsPerCurrencyUnit, snapshot.FallbackRates));
+            if (insert)
             {
                 await _context.Database.ExecuteSqlInterpolatedAsync($"""
                     INSERT INTO [RateSnapshots] (Provider, BaseCurrency, PublishedAt, RetrievedAt, NextUpdateAt, Rates)
@@ -87,9 +117,8 @@ namespace SmartExpenseTracker.Persistence
                     WHERE Provider = {table.Provider} AND BaseCurrency = {table.BaseCurrency}
                     """, cancellationToken);
             }
-
-            await transaction.CommitAsync(cancellationToken);
-            return snapshot;
         }
+
+        private sealed record SnapshotPayload(IReadOnlyDictionary<string, decimal> Rates, IReadOnlyDictionary<string, StoredCurrencyRate> Fallbacks);
     }
 }

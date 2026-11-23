@@ -56,12 +56,326 @@ namespace SmartExpenseTracker.Caching.UnitTests
 
         private Task<ResolvedRates> Resolve() => _services.GetRequiredService<IRateResolver>().ResolveAsync(Token);
 
+        [Test]
+        public void AlreadyCancelledCallerDoesNotReadOrRefresh()
+        {
+            // Arrange
+            using var caller = new CancellationTokenSource();
+            caller.Cancel();
+
+            // Act
+            AsyncTestDelegate act = () =>
+                _services.GetRequiredService<IRateResolver>().ResolveAsync(caller.Token);
+
+            // Assert
+            Assert.CatchAsync<OperationCanceledException>(act);
+            A.CallTo(() => _store.ReadAsync("Test", "EUR", A<CancellationToken>._)).MustNotHaveHappened();
+            A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustNotHaveHappened();
+            Assert.That(_saved, Is.Null);
+        }
+
+        [TestCase("BaseCurrency", "eur")]
+        [TestCase("BaseCurrency", "EU")]
+        [TestCase("BaseCurrency", "EÜR")]
+        [TestCase("BaseCurrency", "")]
+        [TestCase("RefreshInterval", "00:00:00")]
+        [TestCase("RefreshInterval", "-00:00:01")]
+        [TestCase("MaximumAge", "05:59:59")]
+        [TestCase("MaximumAge", "365.00:00:00.0000001")]
+        [TestCase("RefreshTimeout", "00:00:00")]
+        [TestCase("RefreshTimeout", "-00:00:01")]
+        [TestCase("RefreshTimeout", "00:05:00.0000001")]
+        public void RejectsInvalidCachePolicy(string option, string value)
+        {
+            // Arrange
+            using var host = CreateHost(configuration: new Dictionary<string, string?> { [$"RateCache:{option}"] = value });
+
+            // Act
+            TestDelegate act = () => host.GetRequiredService<IOptions<RateCacheOptions>>().Value.ToString();
+
+            // Assert
+            Assert.Throws<OptionsValidationException>(act);
+        }
+
+        [Test]
+        public void AcceptsInclusiveCachePolicyLimits()
+        {
+            // Arrange
+            using var host = CreateHost(configuration: new Dictionary<string, string?>
+            {
+                ["RateCache:RefreshInterval"] = "365.00:00:00",
+                ["RateCache:MaximumAge"] = "365.00:00:00",
+                ["RateCache:RefreshTimeout"] = "00:05:00"
+            });
+
+            // Act
+            var options = host.GetRequiredService<IOptions<RateCacheOptions>>().Value;
+
+            // Assert
+            Assert.That(options.RefreshInterval, Is.EqualTo(TimeSpan.FromDays(365)));
+            Assert.That(options.MaximumAge, Is.EqualTo(options.RefreshInterval));
+            Assert.That(options.RefreshTimeout, Is.EqualTo(TimeSpan.FromMinutes(5)));
+        }
+
+        [TestCase(0, false, 6)]
+        [TestCase(30, false, 30)]
+        [TestCase(30, true, 6)]
+        public async Task NextUpdateSanityBoundaryDeterminesExactRefreshDeadline(int hours, bool beyondLimit, int refreshHours)
+        {
+            // Arrange
+            _table = _table with { NextUpdateAt = _clock.GetUtcNow().AddHours(hours).AddTicks(beyondLimit ? 1 : 0) };
+
+            // Act
+            var original = await Resolve();
+
+            // Arrange
+            _clock.Advance(TimeSpan.FromHours(refreshHours) - TimeSpan.FromTicks(1));
+
+            // Act
+            var actual = await Resolve();
+
+            // Assert
+            Assert.That(actual, Is.EqualTo(original));
+            A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
+
+            // Arrange
+            _clock.Advance(TimeSpan.FromTicks(1));
+
+            // Act
+            var refreshed = await Resolve();
+
+            // Assert
+            Assert.That(refreshed.IsFallback, Is.False);
+            Assert.That(refreshed.Snapshot.RetrievedAt, Is.EqualTo(_clock.GetUtcNow()));
+            Assert.That(refreshed.Snapshot.Table, Is.EqualTo(_table));
+            A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedTwiceExactly();
+        }
+
+        [TestCase("provider")]
+        [TestCase("older")]
+        [TestCase("identity")]
+        public async Task UnusableProviderRefreshPreservesLastKnownSnapshot(string invalid)
+        {
+            // Arrange
+            // Use the shared fixture and test-case inputs.
+
+            // Act
+            var original = await Resolve();
+
+            // Arrange
+            _clock.Advance(TimeSpan.FromHours(6));
+            _table = invalid switch
+            {
+                "provider" => _table with { Provider = "Other" },
+                "older" => _table with { PublishedAt = _table.PublishedAt.AddTicks(-1) },
+                _ => _table with { BaseUnitsPerCurrencyUnit = new Dictionary<string, decimal> { ["EUR"] = 2, ["USD"] = 0.9m }.ToFrozenDictionary() }
+            };
+
+            // Act
+            var actual = await Resolve();
+
+            // Assert
+            Assert.That(actual, Is.EqualTo(new ResolvedRates(original.Snapshot, true)));
+            Assert.That(_saved, Is.EqualTo(original.Snapshot));
+            A.CallTo(() => _store.SaveLatestAsync(A<RateSnapshot>._, A<CancellationToken>._)).MustHaveHappenedOnceExactly();
+        }
+
+        [TestCase(true)]
+        [TestCase(false)]
+        public async Task ColdRecoveryRejectsSnapshotForDifferentProviderOrCurrency(bool wrongProvider)
+        {
+            // Arrange
+            _saved = new RateSnapshot(wrongProvider ? _table with { Provider = "Other" } : _table with
+            {
+                BaseCurrency = "USD",
+                BaseUnitsPerCurrencyUnit = new Dictionary<string, decimal> { ["EUR"] = 1.25m, ["USD"] = 1 }.ToFrozenDictionary()
+            }, _clock.GetUtcNow());
+
+            // Act
+            var resolved = await Resolve();
+
+            // Assert
+            Assert.That(resolved.IsFallback, Is.False);
+            Assert.That(resolved.Snapshot.Table, Is.EqualTo(_table));
+            Assert.That(_saved, Is.EqualTo(resolved.Snapshot));
+            A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
+        }
+
+        [TestCase(true)]
+        [TestCase(false)]
+        public async Task DurableWinnerIsUsedOnlyWhenValid(bool valid)
+        {
+            // Arrange
+            var winner = new RateSnapshot(_table with
+            {
+                Provider = valid ? "Test" : "Other",
+                BaseUnitsPerCurrencyUnit = new Dictionary<string, decimal> { ["EUR"] = 1, ["USD"] = 0.9m }.ToFrozenDictionary()
+            }, _clock.GetUtcNow());
+            A.CallTo(() => _store.SaveLatestAsync(A<RateSnapshot>._, A<CancellationToken>._)).Returns(winner);
+
+            // Act
+            var result = await Resolve();
+
+            // Assert
+            Assert.That(result.IsFallback, Is.False);
+            Assert.That(result.Snapshot, Is.EqualTo(valid ? winner : new RateSnapshot(_table, _clock.GetUtcNow())));
+            Assert.That(result.Snapshot.Table.BaseUnitsPerCurrencyUnit["USD"], Is.EqualTo(valid ? 0.9m : 0.8m));
+
+            // Act
+            var actual = await Resolve();
+
+            // Assert
+            Assert.That(actual, Is.EqualTo(result));
+            A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
+        }
+
+        [TestCase(true)]
+        [TestCase(false)]
+        public async Task RecoveryKeepsNewerMemoryInsteadOfOlderDurableData(bool olderPublication)
+        {
+            // Arrange
+            // Use the shared fixture and test-case inputs.
+
+            // Act
+            var original = await Resolve();
+
+            // Arrange
+            _clock.Advance(TimeSpan.FromHours(6));
+            A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).ThrowsAsync(new HttpRequestException());
+
+            // Act
+            var actual = (await Resolve()).IsFallback;
+
+            // Assert
+            Assert.That(actual, Is.True);
+
+            // Arrange
+            _saved = olderPublication
+                ? original.Snapshot with { Table = _table with { PublishedAt = _table.PublishedAt.AddHours(-1) }, RetrievedAt = _clock.GetUtcNow() }
+                : original.Snapshot with { RetrievedAt = original.Snapshot.RetrievedAt.AddTicks(-1) };
+            _clock.Advance(TimeSpan.FromMinutes(2));
+
+            // Act
+            var actual2 = await Resolve();
+
+            // Assert
+            Assert.That(actual2, Is.EqualTo(new ResolvedRates(original.Snapshot, true)));
+            A.CallTo(() => _store.ReadAsync("Test", "EUR", A<CancellationToken>._)).MustHaveHappenedTwiceExactly();
+            A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappened(3, Times.Exactly);
+        }
+
+        [TestCase(true)]
+        [TestCase(false)]
+        public async Task RecoveryUsesNewerDurableSnapshotWithoutProviderCall(bool newerPublication)
+        {
+            // Arrange
+            // Use the shared fixture and test-case inputs.
+
+            // Act
+            await Resolve();
+
+            // Arrange
+            _clock.Advance(TimeSpan.FromHours(6));
+            A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).ThrowsAsync(new HttpRequestException());
+
+            // Act
+            var actual = (await Resolve()).IsFallback;
+
+            // Assert
+            Assert.That(actual, Is.True);
+
+            // Arrange
+            _saved = new RateSnapshot(_table with
+            {
+                PublishedAt = newerPublication ? _clock.GetUtcNow() : _table.PublishedAt,
+                BaseUnitsPerCurrencyUnit = new Dictionary<string, decimal> { ["EUR"] = 1, ["USD"] = 0.9m }.ToFrozenDictionary()
+            }, _clock.GetUtcNow());
+            _clock.Advance(TimeSpan.FromMinutes(2));
+
+            // Act
+            var recovered = await Resolve();
+
+            // Assert
+            Assert.That(recovered, Is.EqualTo(new ResolvedRates(_saved, false)));
+            Assert.That(recovered.Snapshot.Table.BaseUnitsPerCurrencyUnit["USD"], Is.EqualTo(0.9m));
+
+            // Act
+            var actual2 = await Resolve();
+
+            // Assert
+            Assert.That(actual2, Is.EqualTo(recovered));
+            A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedTwiceExactly();
+        }
+
+        [TestCase(true)]
+        [TestCase(false)]
+        public async Task SharedDeadlineAfterDurableReadDoesNotStartProvider(bool hasFallback)
+        {
+            // Arrange
+            var stored = hasFallback ? new RateSnapshot(_table with { PublishedAt = _clock.GetUtcNow().AddHours(-7) },
+                _clock.GetUtcNow().AddHours(-7)) : null;
+            A.CallTo(() => _store.ReadAsync("Test", "EUR", A<CancellationToken>._))
+                .ReturnsLazily(() =>
+                {
+                    _clock.Advance(TimeSpan.FromSeconds(30));
+                    return Task.FromResult(stored);
+                });
+            if (hasFallback)
+            {
+                // Act
+                var actual = await Resolve();
+
+                // Assert
+                Assert.That(actual, Is.EqualTo(new ResolvedRates(stored!, true)));
+            }
+            else
+            {
+                // Act
+                AsyncTestDelegate act = () => Resolve();
+
+                // Assert
+                Assert.ThrowsAsync<RateUnavailableException>(act);
+            }
+
+            // Assert
+            A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustNotHaveHappened();
+            A.CallTo(() => _store.SaveLatestAsync(A<RateSnapshot>._, A<CancellationToken>._)).MustNotHaveHappened();
+        }
+
+        [Test]
+        public void QuoteExpiringDuringDurableSaveIsNotReturnedOrCached()
+        {
+            // Arrange
+            _table = _table with { PublishedAt = _clock.GetUtcNow().AddHours(-48).AddSeconds(1) };
+            A.CallTo(() => _store.SaveLatestAsync(A<RateSnapshot>._, A<CancellationToken>._))
+                .ReturnsLazily((RateSnapshot snapshot, CancellationToken _) =>
+                {
+                    _clock.Advance(TimeSpan.FromSeconds(1));
+                    return Task.FromResult(snapshot);
+                });
+
+            // Act
+            var failure = Assert.ThrowsAsync<RateUnavailableException>(() => Resolve());
+
+            // Assert
+            Assert.That(failure!.InnerException, Is.TypeOf<InvalidDataException>());
+            Assert.That(_services.GetRequiredService<IMemoryCache>().Get<RateSnapshot>(("Test", "EUR")), Is.Null);
+
+            // Act
+            AsyncTestDelegate act = () => Resolve();
+
+            // Assert
+            Assert.ThrowsAsync<RateUnavailableException>(act);
+            A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
+        }
+
         [TestCase(true, true)]
         [TestCase(true, false)]
         [TestCase(false, true)]
         [TestCase(false, false)]
         public async Task OptionalStoreFailureStillServesLiveTable(bool read, bool slow)
         {
+            // Arrange
             var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             async Task<RateSnapshot> Fail(CancellationToken token)
             {
@@ -85,13 +399,21 @@ namespace SmartExpenseTracker.Caching.UnitTests
                     .ReturnsLazily((RateSnapshot _, CancellationToken token) => Fail(token));
             }
 
+            // Act
             var pending = Resolve();
             await entered.Task.WaitAsync(Token);
             _clock.Advance(TimeSpan.FromSeconds(8));
             var live = await pending.WaitAsync(Token);
+
+            // Assert
             Assert.That(live.IsFallback, Is.False);
             Assert.That(live.Snapshot.Table, Is.EqualTo(_table));
-            Assert.That(await Resolve(), Is.EqualTo(live));
+
+            // Act
+            var actual = await Resolve();
+
+            // Assert
+            Assert.That(actual, Is.EqualTo(live));
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
         }
 
@@ -103,24 +425,48 @@ namespace SmartExpenseTracker.Caching.UnitTests
         [TestCase(503, 2)]
         public async Task SequentialOutageMissesRecheckOnceAtRetryAndRecover(int status, int minutes)
         {
+            // Arrange
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._))
                 .ThrowsAsync(new HttpRequestException("Provider failure", null, (HttpStatusCode)status)).Once().Then.Returns(_table);
             for (var i = 0; i < 4; i++)
             {
-                Assert.ThrowsAsync<RateUnavailableException>(() => Resolve());
+                // Act
+                AsyncTestDelegate act = () => Resolve();
+
+                // Assert
+                Assert.ThrowsAsync<RateUnavailableException>(act);
             }
 
+            // Assert
             A.CallTo(() => _store.ReadAsync("Test", "EUR", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
+
+            // Arrange
             _clock.Advance(TimeSpan.FromMinutes(minutes) - TimeSpan.FromTicks(1));
-            Assert.ThrowsAsync<RateUnavailableException>(() => Resolve());
+
+            // Act
+            AsyncTestDelegate act2 = () => Resolve();
+
+            // Assert
+            Assert.ThrowsAsync<RateUnavailableException>(act2);
             A.CallTo(() => _store.ReadAsync("Test", "EUR", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
+
+            // Arrange
             _clock.Advance(TimeSpan.FromTicks(1));
+
+            // Act
             var result = await Resolve();
+
+            // Assert
             Assert.That(result.Snapshot, Is.EqualTo(_saved));
             Assert.That(result.IsFallback, Is.False);
-            Assert.That(await Resolve(), Is.EqualTo(result));
+
+            // Act
+            var actual = await Resolve();
+
+            // Assert
+            Assert.That(actual, Is.EqualTo(result));
             A.CallTo(() => _store.ReadAsync("Test", "EUR", A<CancellationToken>._)).MustHaveHappenedTwiceExactly();
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedTwiceExactly();
         }
@@ -128,24 +474,53 @@ namespace SmartExpenseTracker.Caching.UnitTests
         [Test]
         public async Task ProviderRecoveryReplacesFallbackAndReusesNewSnapshot()
         {
+            // Arrange
+            // Use the shared fixture and test-case inputs.
+
+            // Act
             var original = await Resolve();
+
+            // Arrange
             _clock.Advance(TimeSpan.FromHours(6));
             _table = _table with { PublishedAt = _clock.GetUtcNow() };
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._))
                 .ThrowsAsync(new HttpRequestException()).Once().Then.Returns(_table);
-            Assert.That((await Resolve()).Snapshot, Is.EqualTo(original.Snapshot));
+
+            // Act
+            var actual = (await Resolve()).Snapshot;
+
+            // Assert
+            Assert.That(actual, Is.EqualTo(original.Snapshot));
+
+            // Arrange
             _clock.Advance(TimeSpan.FromMinutes(2));
+
+            // Act
             var recovered = await Resolve();
+
+            // Assert
             Assert.That(recovered.IsFallback, Is.False);
             Assert.That(recovered.Snapshot.Table, Is.EqualTo(_table));
             Assert.That(_saved, Is.EqualTo(recovered.Snapshot));
-            Assert.That(await Resolve(), Is.EqualTo(recovered));
+
+            // Act
+            var actual2 = await Resolve();
+
+            // Assert
+            Assert.That(actual2, Is.EqualTo(recovered));
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappened(3, Times.Exactly);
             // A successful recovery clears retry state: the next ordinary refresh need not reread SQL.
+
+            // Arrange
             _clock.Advance(TimeSpan.FromHours(6));
             _table = _table with { PublishedAt = _clock.GetUtcNow() };
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).Returns(_table);
-            Assert.That((await Resolve()).IsFallback, Is.False);
+
+            // Act
+            var actual3 = (await Resolve()).IsFallback;
+
+            // Assert
+            Assert.That(actual3, Is.False);
             A.CallTo(() => _store.ReadAsync("Test", "EUR", A<CancellationToken>._)).MustHaveHappenedTwiceExactly();
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappened(4, Times.Exactly);
         }
@@ -154,20 +529,35 @@ namespace SmartExpenseTracker.Caching.UnitTests
         [TestCase(true)]
         public async Task CancellationDuringCacheLookupPreventsFastReturn(bool stale)
         {
+            // Arrange
             var clock = new LookupClock(_clock.GetUtcNow());
             using var host = CreateHost(clock);
             var resolver = host.GetRequiredService<IRateResolver>();
+
+            // Act
             await resolver.ResolveAsync(Token);
             if (stale)
             {
+                // Arrange
                 clock.Now += TimeSpan.FromHours(6);
                 A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).ThrowsAsync(new HttpRequestException());
-                Assert.That((await resolver.ResolveAsync(Token)).IsFallback, Is.True);
+
+                // Act
+                var actual = (await resolver.ResolveAsync(Token)).IsFallback;
+
+                // Assert
+                Assert.That(actual, Is.True);
             }
 
+            // Arrange
             using var caller = new CancellationTokenSource();
             clock.OnRead = caller.Cancel;
-            Assert.CatchAsync<OperationCanceledException>(() => resolver.ResolveAsync(caller.Token));
+
+            // Act
+            AsyncTestDelegate act = () => resolver.ResolveAsync(caller.Token);
+
+            // Assert
+            Assert.CatchAsync<OperationCanceledException>(act);
         }
 
         private sealed class LookupClock : TimeProvider
@@ -191,15 +581,31 @@ namespace SmartExpenseTracker.Caching.UnitTests
         [TestCase(false, 6)]
         public async Task FreshHitsStopAtRefreshDeadline(bool advertised, int hours)
         {
+            // Arrange
             _table = _table with { NextUpdateAt = advertised ? _clock.GetUtcNow().AddHours(hours) : null };
+
+            // Act
             var initial = await Resolve();
+
+            // Arrange
             _clock.Advance(TimeSpan.FromHours(hours) - TimeSpan.FromSeconds(1));
-            Assert.That((await Resolve()).IsFallback, Is.False);
+
+            // Act
+            var actual = (await Resolve()).IsFallback;
+
+            // Assert
+            Assert.That(actual, Is.False);
             Assert.That(_saved, Is.EqualTo(initial.Snapshot));
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
 
+            // Arrange
             _clock.Advance(TimeSpan.FromSeconds(1));
-            Assert.That((await Resolve()).Snapshot.RetrievedAt, Is.EqualTo(_clock.GetUtcNow()));
+
+            // Act
+            var actual2 = (await Resolve()).Snapshot.RetrievedAt;
+
+            // Assert
+            Assert.That(actual2, Is.EqualTo(_clock.GetUtcNow()));
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedTwiceExactly();
         }
 
@@ -207,13 +613,28 @@ namespace SmartExpenseTracker.Caching.UnitTests
         [TestCase(1000)]
         public async Task UnusableNextUpdateUsesSixHourSchedule(int hours)
         {
+            // Arrange
             _table = _table with { NextUpdateAt = _clock.GetUtcNow().AddHours(hours) };
+
+            // Act
             await Resolve();
+
+            // Arrange
             _clock.Advance(TimeSpan.FromHours(5));
+
+            // Act
             await Resolve();
+
+            // Assert
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
+
+            // Arrange
             _clock.Advance(TimeSpan.FromHours(1));
+
+            // Act
             await Resolve();
+
+            // Assert
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedTwiceExactly();
         }
 
@@ -226,7 +647,13 @@ namespace SmartExpenseTracker.Caching.UnitTests
         [TestCase(-3)]
         public async Task RefreshFailureReturnsStaleWithinLimitAndSuppressesRetries(int status)
         {
+            // Arrange
+            // Use the shared fixture and test-case inputs.
+
+            // Act
             var initial = await Resolve();
+
+            // Arrange
             _clock.Advance(TimeSpan.FromHours(6));
             Exception failure = status switch
             {
@@ -237,15 +664,39 @@ namespace SmartExpenseTracker.Caching.UnitTests
                 _ => new HttpRequestException("Provider failure", null, (HttpStatusCode)status)
             };
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).ThrowsAsync(failure);
-            Assert.That(await Resolve(), Is.EqualTo(new ResolvedRates(initial.Snapshot, true)));
-            Assert.That((await Resolve()).IsFallback, Is.True);
+
+            // Act
+            var actual = await Resolve();
+
+            // Assert
+            Assert.That(actual, Is.EqualTo(new ResolvedRates(initial.Snapshot, true)));
+
+            // Act
+            var actual2 = (await Resolve()).IsFallback;
+
+            // Assert
+            Assert.That(actual2, Is.True);
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedTwiceExactly();
+
+            // Arrange
             var cooldown = TimeSpan.FromMinutes(status == 429 ? 20 : 2);
             _clock.Advance(cooldown - TimeSpan.FromTicks(1));
-            Assert.That(await Resolve(), Is.EqualTo(new ResolvedRates(initial.Snapshot, true)));
+
+            // Act
+            var actual3 = await Resolve();
+
+            // Assert
+            Assert.That(actual3, Is.EqualTo(new ResolvedRates(initial.Snapshot, true)));
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedTwiceExactly();
+
+            // Arrange
             _clock.Advance(TimeSpan.FromTicks(1));
-            Assert.That((await Resolve()).IsFallback, Is.True);
+
+            // Act
+            var actual4 = (await Resolve()).IsFallback;
+
+            // Assert
+            Assert.That(actual4, Is.True);
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappened(3, Times.Exactly);
         }
 
@@ -253,6 +704,7 @@ namespace SmartExpenseTracker.Caching.UnitTests
         [TestCase(503, 3)]
         public async Task RetryIntervalsHonorIndependentConfiguration(int status, int minutes)
         {
+            // Arrange
             using var host = CreateHost(configuration: new Dictionary<string, string?>
             {
                 ["RateCache:RetryInterval"] = "00:03:00",
@@ -261,12 +713,31 @@ namespace SmartExpenseTracker.Caching.UnitTests
             var resolver = host.GetRequiredService<IRateResolver>();
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._))
                 .ThrowsAsync(new HttpRequestException("not a status message", null, (HttpStatusCode)status));
-            Assert.ThrowsAsync<RateUnavailableException>(() => resolver.ResolveAsync(Token));
+
+            // Act
+            AsyncTestDelegate act = () => resolver.ResolveAsync(Token);
+
+            // Assert
+            Assert.ThrowsAsync<RateUnavailableException>(act);
+
+            // Arrange
             _clock.Advance(TimeSpan.FromMinutes(minutes) - TimeSpan.FromTicks(1));
-            Assert.ThrowsAsync<RateUnavailableException>(() => resolver.ResolveAsync(Token));
+
+            // Act
+            AsyncTestDelegate act2 = () => resolver.ResolveAsync(Token);
+
+            // Assert
+            Assert.ThrowsAsync<RateUnavailableException>(act2);
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
+
+            // Arrange
             _clock.Advance(TimeSpan.FromTicks(1));
-            Assert.ThrowsAsync<RateUnavailableException>(() => resolver.ResolveAsync(Token));
+
+            // Act
+            AsyncTestDelegate act3 = () => resolver.ResolveAsync(Token);
+
+            // Assert
+            Assert.ThrowsAsync<RateUnavailableException>(act3);
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedTwiceExactly();
         }
 
@@ -278,21 +749,45 @@ namespace SmartExpenseTracker.Caching.UnitTests
         [TestCase("RateLimitRetryInterval", "2.00:00:00")]
         public void RejectsInvalidRetryIntervals(string option, string value)
         {
+            // Arrange
             using var host = CreateHost(configuration: new Dictionary<string, string?> { [$"RateCache:{option}"] = value });
-            Assert.Throws<OptionsValidationException>(() => host.GetRequiredService<IOptions<RateCacheOptions>>().Value.ToString());
+
+            // Act
+            TestDelegate act = () => host.GetRequiredService<IOptions<RateCacheOptions>>().Value.ToString();
+
+            // Assert
+            Assert.Throws<OptionsValidationException>(act);
         }
 
         [TestCase(429)]
         [TestCase(503)]
         public async Task CooldownNeverExtendsFallbackPublicationAge(int status)
         {
+            // Arrange
+            // Use the shared fixture and test-case inputs.
+
+            // Act
             var original = await Resolve();
+
+            // Arrange
             _clock.Advance(TimeSpan.FromHours(48) - TimeSpan.FromMinutes(1));
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._))
                 .ThrowsAsync(new HttpRequestException("Provider failure", null, (HttpStatusCode)status));
-            Assert.That(await Resolve(), Is.EqualTo(new ResolvedRates(original.Snapshot, true)));
+
+            // Act
+            var actual = await Resolve();
+
+            // Assert
+            Assert.That(actual, Is.EqualTo(new ResolvedRates(original.Snapshot, true)));
+
+            // Arrange
             _clock.Advance(TimeSpan.FromMinutes(1));
-            Assert.ThrowsAsync<RateUnavailableException>(() => Resolve());
+
+            // Act
+            AsyncTestDelegate act = () => Resolve();
+
+            // Assert
+            Assert.ThrowsAsync<RateUnavailableException>(act);
             Assert.That(_saved, Is.EqualTo(original.Snapshot));
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedTwiceExactly();
         }
@@ -301,9 +796,17 @@ namespace SmartExpenseTracker.Caching.UnitTests
         [TestCase(503, 2)]
         public async Task RetryBoundaryCoalescesCallersAndPreservesIndependentCancellation(int status, int minutes)
         {
+            // Arrange
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._))
                 .ThrowsAsync(new HttpRequestException("Provider failure", null, (HttpStatusCode)status));
-            Assert.ThrowsAsync<RateUnavailableException>(() => Resolve());
+
+            // Act
+            AsyncTestDelegate act = () => Resolve();
+
+            // Assert
+            Assert.ThrowsAsync<RateUnavailableException>(act);
+
+            // Arrange
             _clock.Advance(TimeSpan.FromMinutes(minutes));
             var release = new TaskCompletionSource<ExchangeRateTable>(TaskCreationOptions.RunContinuationsAsynchronously);
             CancellationToken shared = default;
@@ -314,13 +817,23 @@ namespace SmartExpenseTracker.Caching.UnitTests
                     return release.Task.WaitAsync(token);
                 });
             using var caller = new CancellationTokenSource();
+
+            // Act
             var first = _services.GetRequiredService<IRateResolver>().ResolveAsync(caller.Token);
             var others = Enumerable.Range(0, 16).Select(_ => Resolve()).ToArray();
             await caller.CancelAsync();
-            Assert.CatchAsync<OperationCanceledException>(async () => await first);
+            AsyncTestDelegate act2 = async () => await first;
+
+            // Assert
+            Assert.CatchAsync<OperationCanceledException>(act2);
             Assert.That(shared.IsCancellationRequested, Is.False);
+
+            // Act
             release.SetResult(_table);
-            Assert.That((await Task.WhenAll(others)).All(r => !r.IsFallback), Is.True);
+            var actual = (await Task.WhenAll(others)).All(r => !r.IsFallback);
+
+            // Assert
+            Assert.That(actual, Is.True);
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedTwiceExactly();
             A.CallTo(() => _store.ReadAsync("Test", "EUR", A<CancellationToken>._)).MustHaveHappenedTwiceExactly();
         }
@@ -328,16 +841,41 @@ namespace SmartExpenseTracker.Caching.UnitTests
         [Test]
         public async Task InvalidRateCannotReplaceEligibleSnapshot()
         {
+            // Arrange
+            // Use the shared fixture and test-case inputs.
+
+            // Act
             var initial = await Resolve();
+
+            // Arrange
             _clock.Advance(TimeSpan.FromHours(6));
             _table = _table with { BaseCurrency = "GBP" };
-            Assert.That((await Resolve()).IsFallback, Is.True);
+
+            // Act
+            var actual = (await Resolve()).IsFallback;
+
+            // Assert
+            Assert.That(actual, Is.True);
             Assert.That(_saved, Is.EqualTo(initial.Snapshot));
+
+            // Arrange
             _clock.Advance(TimeSpan.FromMinutes(2) - TimeSpan.FromTicks(1));
-            Assert.That((await Resolve()).IsFallback, Is.True);
+
+            // Act
+            var actual2 = (await Resolve()).IsFallback;
+
+            // Assert
+            Assert.That(actual2, Is.True);
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedTwiceExactly();
+
+            // Arrange
             _clock.Advance(TimeSpan.FromTicks(1));
-            Assert.That((await Resolve()).IsFallback, Is.True);
+
+            // Act
+            var actual3 = (await Resolve()).IsFallback;
+
+            // Assert
+            Assert.That(actual3, Is.True);
             Assert.That(_saved, Is.EqualTo(initial.Snapshot));
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappened(3, Times.Exactly);
         }
@@ -345,23 +883,58 @@ namespace SmartExpenseTracker.Caching.UnitTests
         [Test]
         public async Task RepeatedPublicationExpiresExactlyAtMaximumAge()
         {
+            // Arrange
+            // Use the shared fixture and test-case inputs.
+
+            // Act
             var first = await Resolve();
+
+            // Arrange
             _clock.Advance(TimeSpan.FromHours(48) - TimeSpan.FromSeconds(1));
+
+            // Act
             var repeated = await Resolve();
+
+            // Assert
             Assert.That(repeated.Snapshot.RetrievedAt, Is.GreaterThan(first.Snapshot.RetrievedAt));
             Assert.That(repeated.Snapshot.Table.PublishedAt, Is.EqualTo(first.Snapshot.Table.PublishedAt));
+
+            // Arrange
             _clock.Advance(TimeSpan.FromSeconds(1));
-            Assert.ThrowsAsync<RateUnavailableException>(() => Resolve());
+
+            // Act
+            AsyncTestDelegate act = () => Resolve();
+
+            // Assert
+            Assert.ThrowsAsync<RateUnavailableException>(act);
         }
 
         [Test]
         public async Task FreshDurableSnapshotRecoversAfterEvictionAndRestart()
         {
+            // Arrange
+            // Use the shared fixture and test-case inputs.
+
+            // Act
             var first = await Resolve();
+
+            // Arrange
             _services.GetRequiredService<IMemoryCache>().Remove(("Test", "EUR"));
-            Assert.That(await Resolve(), Is.EqualTo(first));
+
+            // Act
+            var actual = await Resolve();
+
+            // Assert
+            Assert.That(actual, Is.EqualTo(first));
+
+            // Arrange
             using var restarted = CreateHost();
-            Assert.That(await restarted.GetRequiredService<IRateResolver>().ResolveAsync(Token), Is.EqualTo(first));
+
+            // Act
+            var actual2 = await restarted.GetRequiredService<IRateResolver>().ResolveAsync(Token);
+
+            // Assert
+            Assert.That(actual2, Is.EqualTo(first));
             A.CallTo(() => _store.ReadAsync("Test", "EUR", A<CancellationToken>._)).MustHaveHappened(3, Times.Exactly);
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
         }
@@ -369,6 +942,7 @@ namespace SmartExpenseTracker.Caching.UnitTests
         [Test]
         public async Task ConcurrentWaitersShareFetchAndCancelIndependently()
         {
+            // Arrange
             var release = new TaskCompletionSource<ExchangeRateTable>(TaskCreationOptions.RunContinuationsAsynchronously);
             CancellationToken shared = default;
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._))
@@ -378,33 +952,68 @@ namespace SmartExpenseTracker.Caching.UnitTests
                     return release.Task.WaitAsync(token);
                 });
             using var caller = new CancellationTokenSource();
+
+            // Act
             var first = _services.GetRequiredService<IRateResolver>().ResolveAsync(caller.Token);
             var others = Enumerable.Range(0, 16).Select(_ => Resolve()).ToArray();
             await caller.CancelAsync();
-            Assert.CatchAsync<OperationCanceledException>(async () => await first);
+            AsyncTestDelegate act = async () => await first;
+
+            // Assert
+            Assert.CatchAsync<OperationCanceledException>(act);
             Assert.That(shared.IsCancellationRequested, Is.False);
+
+            // Act
             release.SetResult(_table);
-            Assert.That((await Task.WhenAll(others)).All(r => !r.IsFallback), Is.True);
+            var actual = (await Task.WhenAll(others)).All(r => !r.IsFallback);
+
+            // Assert
+            Assert.That(actual, Is.True);
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
         }
 
         [Test]
         public async Task SharedTimeoutWithoutFallbackIsUnavailableAndSuppressesNextFetch()
         {
+            // Arrange
             var never = new TaskCompletionSource<ExchangeRateTable>(TaskCreationOptions.RunContinuationsAsynchronously);
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._))
                 .ReturnsLazily((string _, CancellationToken token) => never.Task.WaitAsync(token));
+
+            // Act
             var waiting = Resolve();
             _clock.Advance(TimeSpan.FromSeconds(30));
-            Assert.ThrowsAsync<RateUnavailableException>(async () => await waiting.WaitAsync(Token));
-            Assert.ThrowsAsync<RateUnavailableException>(() => Resolve());
+            AsyncTestDelegate act = async () => await waiting.WaitAsync(Token);
+
+            // Assert
+            Assert.ThrowsAsync<RateUnavailableException>(act);
+
+            // Act
+            AsyncTestDelegate act2 = () => Resolve();
+
+            // Assert
+            Assert.ThrowsAsync<RateUnavailableException>(act2);
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
+
+            // Arrange
             _clock.Advance(TimeSpan.FromMinutes(2) - TimeSpan.FromTicks(1));
-            Assert.ThrowsAsync<RateUnavailableException>(() => Resolve());
+
+            // Act
+            AsyncTestDelegate act3 = () => Resolve();
+
+            // Assert
+            Assert.ThrowsAsync<RateUnavailableException>(act3);
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedOnceExactly();
+
+            // Arrange
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).Returns(_table);
             _clock.Advance(TimeSpan.FromTicks(1));
-            Assert.That((await Resolve()).IsFallback, Is.False);
+
+            // Act
+            var actual = (await Resolve()).IsFallback;
+
+            // Assert
+            Assert.That(actual, Is.False);
             A.CallTo(() => _provider.GetLatestAsync("EUR", A<CancellationToken>._)).MustHaveHappenedTwiceExactly();
         }
     }

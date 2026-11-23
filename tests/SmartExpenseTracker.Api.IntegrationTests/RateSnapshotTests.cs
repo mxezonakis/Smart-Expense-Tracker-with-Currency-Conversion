@@ -54,6 +54,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         [Test]
         public async Task ConcurrentWritersKeepNewestCompleteTable()
         {
+            // Arrange
             await using var host = CreateHost(Published.AddHours(8));
             var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             async Task Write(int version)
@@ -65,11 +66,13 @@ namespace SmartExpenseTracker.Api.IntegrationTests
                 await store.SaveLatestAsync(snapshot, Token);
             }
 
+            // Act
             var writes = Enumerable.Range(0, 8).Select(Write).ToArray();
             gate.SetResult();
             await Task.WhenAll(writes);
             await Write(0);
 
+            // Assert
             await using var verification = host.Services.CreateAsyncScope();
             var table = await verification.ServiceProvider.GetRequiredService<IRateSnapshotStore>().ReadAsync("ExchangeRate-API", "EUR", Token);
             Assert.That(table!.Table.PublishedAt, Is.EqualTo(Published.AddHours(7)));
@@ -82,6 +85,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         [TestCase("{\"EUR\":1,\"USD\":2,\"USD\":3}", 0)]
         public async Task LiveProviderRepairsInvalidRowForOfflineRestart(string rates, int futureHours)
         {
+            // Arrange
             await using (var host = CreateHost(Published, true))
             {
                 await using var scope = host.Services.CreateAsyncScope();
@@ -92,14 +96,27 @@ namespace SmartExpenseTracker.Api.IntegrationTests
                     VALUES ('ExchangeRate-API', 'EUR', {stamp}, {stamp}, {rates})
                     """, Token);
                 var store = scope.ServiceProvider.GetRequiredService<IRateSnapshotStore>();
-                Assert.That(await store.ReadAsync("ExchangeRate-API", "EUR", Token), Is.Null);
+
+                // Act
+                var actual = await store.ReadAsync("ExchangeRate-API", "EUR", Token);
+
+                // Assert
+                Assert.That(actual, Is.Null);
+
+                // Act
                 var live = await host.Services.GetRequiredService<IRateResolver>().ResolveAsync(Token);
+
+                // Assert
                 Assert.That(live.IsFallback, Is.False);
                 Assert.That(live.Snapshot.Table.PublishedAt, Is.EqualTo(Published));
             }
 
             await using var restarted = CreateHost(Published.AddMinutes(5));
+
+            // Act
             var restored = await restarted.Services.GetRequiredService<IRateResolver>().ResolveAsync(Token);
+
+            // Assert
             Assert.That(restored.IsFallback, Is.False);
             Assert.That(restored.Snapshot.Table.BaseUnitsPerCurrencyUnit["USD"], Is.EqualTo(1m));
         }
@@ -107,21 +124,34 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         [Test]
         public async Task RejectedSqlInsertStillServesLiveTableFromMemory()
         {
+            // Arrange
             await using var host = CreateHost(Published, true);
             await using var scope = host.Services.CreateAsyncScope();
             var database = scope.ServiceProvider.GetRequiredService<SmartExpenseTrackerDbContext>().Database;
             await database.ExecuteSqlRawAsync("ALTER TABLE RateSnapshots ADD CHECK (BaseCurrency <> 'EUR')", Token);
             var resolver = host.Services.GetRequiredService<IRateResolver>();
+
+            // Act
             var live = await resolver.ResolveAsync(Token);
+
+            // Assert
             Assert.That(live.IsFallback, Is.False);
-            Assert.That((await resolver.ResolveAsync(Token)).Snapshot, Is.SameAs(live.Snapshot));
+
+            // Act
+            var actual = (await resolver.ResolveAsync(Token)).Snapshot;
+
+            // Assert
+            Assert.That(actual, Is.SameAs(live.Snapshot));
             var store = scope.ServiceProvider.GetRequiredService<IRateSnapshotStore>();
-            Assert.That(await store.ReadAsync("ExchangeRate-API", "EUR", Token), Is.Null);
+            var actual2 = await store.ReadAsync("ExchangeRate-API", "EUR", Token);
+
+            Assert.That(actual2, Is.Null);
         }
 
         [Test]
         public async Task RepairWaitsForConcurrentWriterAndPreservesNewerRetrievalAndExactDecimal()
         {
+            // Arrange
             await using var host = CreateHost(Published.AddHours(1));
             await using var scope = host.Services.CreateAsyncScope();
             var store = scope.ServiceProvider.GetRequiredService<IRateSnapshotStore>();
@@ -130,8 +160,14 @@ namespace SmartExpenseTracker.Api.IntegrationTests
                 INSERT INTO RateSnapshots (Provider, BaseCurrency, PublishedAt, RetrievedAt, Rates)
                 VALUES ('ExchangeRate-API', 'EUR', {Published}, {Published}, {"{}"})
                 """, Token);
-            Assert.That(await store.ReadAsync("ExchangeRate-API", "EUR", Token), Is.Null);
 
+            // Act
+            var actual = await store.ReadAsync("ExchangeRate-API", "EUR", Token);
+
+            // Assert
+            Assert.That(actual, Is.Null);
+
+            // Arrange
             var newer = Published.AddMinutes(1);
             const decimal precise = 0.1234567890123456789012345678m;
             const string json = """{"EUR":1,"USD":0.1234567890123456789012345678}""";
@@ -145,6 +181,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
             update.Parameters.AddWithValue("@rates", json);
             await update.ExecuteNonQueryAsync(Token);
 
+            // Act
             var repair = store.SaveLatestAsync(CreateSnapshot(0), Token);
             try
             {
@@ -173,6 +210,8 @@ namespace SmartExpenseTracker.Api.IntegrationTests
             }
 
             var winner = await store.ReadAsync("ExchangeRate-API", "EUR", Token);
+
+            // Assert
             Assert.That(winner!.RetrievedAt, Is.EqualTo(newer));
             Assert.That(winner.Table.BaseUnitsPerCurrencyUnit["USD"], Is.EqualTo(precise));
         }
@@ -181,6 +220,7 @@ namespace SmartExpenseTracker.Api.IntegrationTests
         [TestCase(48, false)]
         public async Task RestartDuringOutageUsesOnlyUnexpiredPublication(int hours, bool available)
         {
+            // Arrange
             await using (var initial = CreateHost(Published))
             {
                 await using var scope = initial.Services.CreateAsyncScope();
@@ -191,15 +231,143 @@ namespace SmartExpenseTracker.Api.IntegrationTests
             var resolver = restarted.Services.GetRequiredService<IRateResolver>();
             if (available)
             {
+                // Act
                 var result = await resolver.ResolveAsync(Token);
+
+                // Assert
                 Assert.That(result.IsFallback, Is.True);
                 Assert.That(result.Snapshot.Table.PublishedAt.EqualsExact(Published), Is.True);
                 Assert.That(result.Snapshot.RetrievedAt, Is.EqualTo(Published));
             }
             else
             {
-                Assert.ThrowsAsync<RateUnavailableException>(() => resolver.ResolveAsync(Token));
+                // Act
+                AsyncTestDelegate act = () => resolver.ResolveAsync(Token);
+
+                // Assert
+                Assert.ThrowsAsync<RateUnavailableException>(act);
             }
+        }
+
+        [Test]
+        public async Task InvalidCandidateCannotReplacePersistedSnapshot()
+        {
+            // Arrange
+            await using var host = CreateHost(Published.AddHours(1));
+            var original = CreateSnapshot(0);
+            await using (var scope = host.Services.CreateAsyncScope())
+            {
+                var store = scope.ServiceProvider.GetRequiredService<IRateSnapshotStore>();
+                await store.SaveLatestAsync(original, Token);
+                var invalid = original with
+                {
+                    Table = original.Table with
+                    {
+                        BaseUnitsPerCurrencyUnit = new Dictionary<string, decimal> { ["EUR"] = 1m, ["USD"] = 0m }.ToFrozenDictionary()
+                    }
+                };
+
+                // Act
+                AsyncTestDelegate act = () => store.SaveLatestAsync(invalid, Token);
+
+                // Assert
+                Assert.ThrowsAsync<InvalidDataException>(act);
+            }
+
+            // Assert
+            await using var verification = host.Services.CreateAsyncScope();
+            var saved = await verification.ServiceProvider.GetRequiredService<IRateSnapshotStore>()
+                .ReadAsync("ExchangeRate-API", "EUR", Token);
+            Assert.That(saved, Is.Not.Null);
+            Assert.That(saved!.RetrievedAt, Is.EqualTo(original.RetrievedAt));
+            Assert.That(saved.Table.PublishedAt, Is.EqualTo(original.Table.PublishedAt));
+            Assert.That(saved.Table.BaseUnitsPerCurrencyUnit, Is.EquivalentTo(original.Table.BaseUnitsPerCurrencyUnit));
+        }
+
+        [Test]
+        public async Task EqualPublicationUsesNewestRetrievalAndPreservesScheduleAndExactRates()
+        {
+            // Arrange
+            await using var host = CreateHost(Published.AddHours(1));
+            var first = CreateSnapshot(0);
+            var newer = first with
+            {
+                RetrievedAt = Published.AddMinutes(1),
+                Table = first.Table with
+                {
+                    NextUpdateAt = Published.AddDays(1),
+                    BaseUnitsPerCurrencyUnit = new Dictionary<string, decimal>
+                    {
+                        ["EUR"] = 1m,
+                        ["USD"] = 0.1234567890123456789012345678m
+                    }.ToFrozenDictionary()
+                }
+            };
+            await using (var scope = host.Services.CreateAsyncScope())
+            {
+                var store = scope.ServiceProvider.GetRequiredService<IRateSnapshotStore>();
+
+                // Act
+                await store.SaveLatestAsync(first, Token);
+                await store.SaveLatestAsync(newer, Token);
+                foreach (var retrieval in new[] { first.RetrievedAt, newer.RetrievedAt })
+                {
+                    // Arrange
+                    var loser = first with { RetrievedAt = retrieval };
+
+                    // Act
+                    var winner = await store.SaveLatestAsync(loser, Token);
+
+                    // Assert
+                    Assert.That(winner.RetrievedAt, Is.EqualTo(newer.RetrievedAt));
+                    Assert.That(winner.Table.NextUpdateAt, Is.EqualTo(newer.Table.NextUpdateAt));
+                    Assert.That(winner.Table.BaseUnitsPerCurrencyUnit, Is.EquivalentTo(newer.Table.BaseUnitsPerCurrencyUnit));
+                }
+            }
+
+            // Assert
+            await using var verification = host.Services.CreateAsyncScope();
+            var saved = await verification.ServiceProvider.GetRequiredService<IRateSnapshotStore>()
+                .ReadAsync("ExchangeRate-API", "EUR", Token);
+            Assert.That(saved!.RetrievedAt, Is.EqualTo(newer.RetrievedAt));
+            Assert.That(saved.Table.NextUpdateAt, Is.EqualTo(newer.Table.NextUpdateAt));
+            Assert.That(saved.Table.BaseUnitsPerCurrencyUnit, Is.EquivalentTo(newer.Table.BaseUnitsPerCurrencyUnit));
+        }
+
+        [TestCase("exchangeRate-API", "EUR")]
+        [TestCase("ExchangeRate-API", "eur")]
+        public async Task CaseInsensitiveSqlMatchDoesNotReturnDifferentSnapshotKey(string provider, string currency)
+        {
+            // Arrange
+            await using var host = CreateHost(Published);
+            await using var scope = host.Services.CreateAsyncScope();
+            var store = scope.ServiceProvider.GetRequiredService<IRateSnapshotStore>();
+            await store.SaveLatestAsync(CreateSnapshot(0), Token);
+            var context = scope.ServiceProvider.GetRequiredService<SmartExpenseTrackerDbContext>();
+
+            // Act
+            var matches = await context.Database.SqlQuery<int>($"""
+                SELECT COUNT(*) AS [Value] FROM RateSnapshots
+                WHERE Provider = {provider} AND BaseCurrency = {currency}
+                """).SingleAsync(Token);
+
+            // Assert
+            Assert.That(matches, Is.EqualTo(1), "SQL matches the key case-insensitively; decoding must still reject the different key.");
+
+            // Act
+            var actual = await store.ReadAsync(provider, currency, Token);
+
+            // Assert
+            Assert.That(actual, Is.Null);
+
+            // Act
+            var original = await store.ReadAsync("ExchangeRate-API", "EUR", Token);
+
+            // Assert
+            Assert.That(original, Is.Not.Null);
+            Assert.That(original!.Table.Provider, Is.EqualTo("ExchangeRate-API"));
+            Assert.That(original.Table.BaseCurrency, Is.EqualTo("EUR"));
+            Assert.That(original.Table.BaseUnitsPerCurrencyUnit["USD"], Is.EqualTo(1m));
         }
 
         private static RateSnapshot CreateSnapshot(int version)

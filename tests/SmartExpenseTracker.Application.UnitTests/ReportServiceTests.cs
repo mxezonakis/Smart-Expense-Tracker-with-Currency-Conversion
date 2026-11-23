@@ -12,7 +12,14 @@ namespace SmartExpenseTracker.Application.UnitTests
         [TestCase("month", ReportPeriod.Month)]
         public void ParsesSupportedPeriods(string value, ReportPeriod expected)
         {
-            ReportService.ParsePeriod(value).Should().Be(expected);
+            // Arrange
+            // Use the shared fixture and test-case inputs.
+
+            // Act
+            var actual = ReportService.ParsePeriod(value);
+
+            // Assert
+            actual.Should().Be(expected);
         }
 
         [TestCase(null)]
@@ -22,12 +29,20 @@ namespace SmartExpenseTracker.Application.UnitTests
         [TestCase("quarter")]
         public void RejectsOtherPeriods(string? value)
         {
-            ReportService.ParsePeriod(value).Should().BeNull();
+            // Arrange
+            // Use the shared fixture and test-case inputs.
+
+            // Act
+            var actual = ReportService.ParsePeriod(value);
+
+            // Assert
+            actual.Should().BeNull();
         }
 
         [Test]
         public async Task PassesGroupingAndCallerTokenToStoreAndReturnsStoredTotals()
         {
+            // Arrange
             using var source = new CancellationTokenSource();
             var store = A.Fake<IReportStore>(options => options.Strict());
             var service = new ReportService(store);
@@ -36,8 +51,17 @@ namespace SmartExpenseTracker.Application.UnitTests
             A.CallTo(() => store.ByCategoryAsync(source.Token)).Returns(categories);
             A.CallTo(() => store.ByPeriodAsync(ReportPeriod.Month, source.Token)).Returns(periods);
 
-            (await service.ByCategoryAsync(source.Token)).Should().BeEmpty();
-            (await service.ByPeriodAsync(ReportPeriod.Month, source.Token)).Should().Equal(periods);
+            // Act
+            var actual = (await service.ByCategoryAsync(source.Token));
+
+            // Assert
+            actual.Should().BeEmpty();
+
+            // Act
+            var actual2 = (await service.ByPeriodAsync(ReportPeriod.Month, source.Token));
+
+            // Assert
+            actual2.Should().Equal(periods);
         }
     }
 }

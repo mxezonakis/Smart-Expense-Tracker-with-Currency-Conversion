@@ -177,6 +177,21 @@ dotnet package list --project SmartExpenseTracker.slnx --no-restore --vulnerable
 
 The full suite requires a running Docker Linux engine with support for the SQL Server 2022 x86-64 image, enough memory for SQL Server, and access to pull the image. The SqlServer fixture starts a disposable container and migrates an empty database per test. For the Docker-independent subset use `dotnet test SmartExpenseTracker.slnx --filter 'TestCategory!=SqlServer'`. The host tests run without Docker, SQL Server or a live currency provider. In restricted Windows environments, VSTest may be unable to connect to its test host, and the formatter may be denied access to its build-host named pipe. Run those checks in a terminal or CI runner that permits local process communication. The vulnerability audit requires access to current advisory data.
 
+### Code coverage
+
+Coverage uses the existing NUnit/VSTest runner with Coverlet 8.0.1 (MIT) and a pinned local ReportGenerator 5.5.12 tool (Apache-2.0). After the Release build, with Docker running:
+
+```powershell
+dotnet tool restore
+$coverageRun = Join-Path 'TestResults' ([Guid]::NewGuid().ToString('N'))
+dotnet test SmartExpenseTracker.slnx --configuration Release --no-build --no-restore --settings coverage.runsettings --collect 'XPlat Code Coverage' --logger trx --results-directory "$coverageRun/raw"
+dotnet reportgenerator "-reports:$coverageRun/raw/**/coverage.cobertura.xml" "-targetdir:$coverageRun/report" '-reporttypes:Html;Cobertura;JsonSummary;MarkdownSummaryGithub'
+```
+
+Open `report/index.html` under that run directory for per-project and per-file line/branch details, or consume its merged `Cobertura.xml` and `Summary.json`. Raw collector JSON retains method and individual branch data. Each run uses a new directory so previous results cannot inflate the current report. Reports measure exactly the five production assemblies; test assemblies, generated build files, EF migration designer files and the generated model snapshot are excluded. Handwritten migrations, application rules, infrastructure and API code remain included. A covered line means execution, not proof of every behavior; branch coverage and assertions must also be reviewed.
+
+CI runs the full SQL-enabled suite with the same settings, shows line/branch coverage in the job summary, and uploads raw test results plus consolidated HTML/Cobertura reports as `tests-and-coverage`. There is no percentage gate. Do not treat coverage from failed or incomplete SQL tests as a successful full-suite result.
+
 See the [development workflow](AGENTS.md), [C# conventions](docs/DOTNET_BACKEND_INSTRUCTIONS.md) and [implementation plan](implementation-plan.md). The requirement source is the privately supplied assignment specification. Obtain it from the assignment owner and place the local copy under `docs/` when working on a phase.
 
 ## Spending reports

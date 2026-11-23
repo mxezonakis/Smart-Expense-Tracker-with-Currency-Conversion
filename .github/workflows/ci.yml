@@ -30,8 +30,27 @@ jobs:
       - name: Verify Docker engine for SQL Server tests
         run: docker info
 
-      - name: Run NUnit tests (including SQL Server)
-        run: dotnet test SmartExpenseTracker.slnx --configuration Release --no-build --no-restore --logger "console;verbosity=normal"
+      - name: Restore coverage reporting tool
+        run: dotnet tool restore
+
+      - name: Run NUnit tests with coverage (including SQL Server)
+        run: dotnet test SmartExpenseTracker.slnx --configuration Release --no-build --no-restore --settings coverage.runsettings --collect "XPlat Code Coverage" --logger "console;verbosity=normal" --logger trx --results-directory TestResults/coverage
+
+      - name: Consolidate production coverage
+        if: ${{ !cancelled() }}
+        run: dotnet reportgenerator "-reports:TestResults/coverage/**/coverage.cobertura.xml" "-targetdir:TestResults/coverage-report" "-reporttypes:Html;Cobertura;JsonSummary;MarkdownSummaryGithub"
+
+      - name: Publish coverage summary
+        if: ${{ !cancelled() }}
+        run: cat TestResults/coverage-report/SummaryGithub.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload tests and coverage reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tests-and-coverage
+          path: TestResults/
+          if-no-files-found: error
 
       - name: Verify formatting
         run: dotnet format SmartExpenseTracker.slnx --no-restore --verify-no-changes

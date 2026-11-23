@@ -34,13 +34,26 @@ namespace SmartExpenseTracker.Application.UnitTests
         [Test]
         public async Task WritesTrimOnlyOuterWhitespaceAndForwardCancellation()
         {
+            // Arrange
             var store = A.Fake<ICategoryStore>();
             var service = new CategoryService(store);
             var token = TestContext.CurrentContext.CancellationToken;
             var name = "a B".PadRight(100, 'x');
 
-            await service.CreateAsync("\u2003" + name + "\t", token);
-            await service.RenameAsync(1, " " + name + " ", token);
+            A.CallTo(() => store.CreateAsync(name, token)).Returns(new Category(7, name));
+            A.CallTo(() => store.RenameAsync(1, name, token)).Returns(true);
+
+            // Act
+            var actual = (await service.CreateAsync("\u2003" + name + "\t", token));
+
+            // Assert
+            actual.Should().Be(new Category(7, name));
+
+            // Act
+            var actual2 = (await service.RenameAsync(1, " " + name + " ", token));
+
+            // Assert
+            actual2.Should().BeTrue();
 
             A.CallTo(() => store.CreateAsync(name, token)).MustHaveHappenedOnceExactly();
             A.CallTo(() => store.RenameAsync(1, name, token)).MustHaveHappenedOnceExactly();
@@ -49,16 +62,36 @@ namespace SmartExpenseTracker.Application.UnitTests
         [Test]
         public async Task MissingCategoryRemainsDistinguishableFromDuplicate()
         {
+            // Arrange
             var store = A.Fake<ICategoryStore>();
             var service = new CategoryService(store);
             var token = TestContext.CurrentContext.CancellationToken;
             A.CallTo(() => store.FindAsync(7, token)).Returns((Category?)null);
             A.CallTo(() => store.CreateAsync("Food", token)).ThrowsAsync(new DuplicateCategoryNameException(new Exception()));
 
-            (await service.FindAsync(7, token)).Should().BeNull();
-            (await service.RenameAsync(7, "Food", token)).Should().BeFalse();
-            (await service.DeleteAsync(7, token)).Should().BeFalse();
-            Assert.ThrowsAsync<DuplicateCategoryNameException>(() => service.CreateAsync(" Food ", token));
+            // Act
+            var actual = (await service.FindAsync(7, token));
+
+            // Assert
+            actual.Should().BeNull();
+
+            // Act
+            var actual2 = (await service.RenameAsync(7, "Food", token));
+
+            // Assert
+            actual2.Should().BeFalse();
+
+            // Act
+            var actual3 = (await service.DeleteAsync(7, token));
+
+            // Assert
+            actual3.Should().BeFalse();
+
+            // Act
+            AsyncTestDelegate act = () => service.CreateAsync(" Food ", token);
+
+            // Assert
+            Assert.ThrowsAsync<DuplicateCategoryNameException>(act);
         }
     }
 }

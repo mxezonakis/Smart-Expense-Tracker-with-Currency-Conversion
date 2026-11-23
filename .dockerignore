@@ -1,0 +1,13 @@
+**
+!Dockerfile
+!.editorconfig
+!global.json
+!Directory.Build.props
+!Directory.Packages.props
+!src/
+!src/**
+**/bin/
+**/obj/
+**/*.user
+**/*.env
+**/appsettings.Local.json

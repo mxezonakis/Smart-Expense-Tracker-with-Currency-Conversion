@@ -74,6 +74,7 @@ jobs:
           docker compose up --build --detach
           docker compose ps --all
           url=http://127.0.0.1:54131
-          curl --retry 20 --retry-connrefused --retry-delay 1 -fsS "$url/api/categories" | jq -e '. == []'
+          curl --retry 20 --retry-all-errors --retry-delay 1 -fsS "$url/api/categories" -o "$RUNNER_TEMP/categories.json"
+          jq -e '. == []' "$RUNNER_TEMP/categories.json"
           curl -fsS "$url/swagger/index.html" | grep -i 'swagger-ui'
           curl -fsS "$url/openapi/v1.json" | jq -e '.paths["/api/categories"].get != null'
